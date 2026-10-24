@@ -1,0 +1,40 @@
+[package]
+name = "merton-api"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+description = "Self-hosted, multi-user investment portfolio tracking backend"
+license = "Apache-2.0"
+repository = "https://github.com/merton-labs/merton-api"
+publish = false
+
+[dependencies]
+axum = "0.8.9"
+dotenvy = "0.15.7"
+sea-orm = { version = "2.0.4", default-features = false, features = [
+    "macros",
+    "runtime-tokio",
+    "sqlx-sqlite",
+] }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = [
+    "runtime-tokio",
+    "sqlx-sqlite",
+] }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.7.1", features = ["trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+utoipa = "6.0.0"
+
+[dev-dependencies]
+serde_json = "1.0.154"
+tower = { version = "0.5.3", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+expect_used = "warn"
+unwrap_used = "warn"

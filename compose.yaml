@@ -1,0 +1,18 @@
+services:
+  api:
+    build: .
+    image: merton-api:local
+    restart: unless-stopped
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8080
+      DATABASE_URL: sqlite:///app/data/merton.db
+      RUST_LOG: ${RUST_LOG:-merton_api=info,tower_http=info,sqlx=warn}
+    ports:
+      # Published on localhost only; change to "8080:8080" to expose on the network.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - merton-data:/app/data
+
+volumes:
+  merton-data:
