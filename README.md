@@ -2,9 +2,12 @@
 
 Backend for **Merton**, an open-source, self-hosted, multi-user investment portfolio tracker.
 
-> **Status: authentication.** The server foundation plus local email/password
-> accounts with server-managed cookie sessions are implemented. No portfolio
-> or financial features have been built yet.
+> **Status: portfolios.** The server foundation, local email/password
+> accounts with server-managed cookie sessions, and private portfolio
+> management are implemented. No financial features (instruments, cash,
+> transactions, valuation) have been built yet. See
+> [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the roadmap and
+> [CLAUDE.md](CLAUDE.md) for contributor rules.
 
 ## Technology stack
 
@@ -54,11 +57,22 @@ automatically before the server starts accepting requests.
 | POST   | `/api/v1/auth/logout`   | cookie + CSRF   | Revoke the session and clear the cookie (`204`)     |
 | GET    | `/api/v1/auth/me`       | cookie          | Current user `{id, email}`                          |
 | GET    | `/api/v1/auth/csrf`     | cookie          | CSRF token for the current session                  |
+| GET    | `/api/v1/portfolios`    | cookie          | List own portfolios (`limit` 1–200, default 50; `offset`; `status`) |
+| POST   | `/api/v1/portfolios`    | cookie + CSRF   | Create a portfolio `{name, base_currency}` (`201` + `Location`) |
+| GET    | `/api/v1/portfolios/{id}` | cookie        | Get an own portfolio                                |
+| PATCH  | `/api/v1/portfolios/{id}` | cookie + CSRF | Rename or change base currency (active only)        |
+| POST   | `/api/v1/portfolios/{id}/archive` | cookie + CSRF | Archive (read-only until restored)        |
+| POST   | `/api/v1/portfolios/{id}/restore` | cookie + CSRF | Restore to active                         |
+| DELETE | `/api/v1/portfolios/{id}` | cookie + CSRF | Delete a portfolio without financial history (`204`) |
 
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 (`application/problem+json`) with a stable `code` field, for example
 `invalid_credentials`, `email_taken`, `validation_failed`, `csrf_invalid`,
-`untrusted_origin`, `rate_limited`, `service_overloaded`.
+`untrusted_origin`, `rate_limited`, `service_overloaded`, `not_found`,
+`portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history`.
+
+Portfolios belong to exactly one user. Another user's portfolio is reported
+as `404`, exactly like one that does not exist.
 
 A browser client logs in, then calls `GET /api/v1/auth/csrf` and sends the
 returned token as `X-CSRF-Token` on authenticated state-changing requests.
@@ -189,6 +203,7 @@ src/
 │   ├── rate_limit.rs    #   In-memory login limits
 │   ├── repository.rs    #   User and session queries
 │   └── service.rs       #   Register, login, authenticate, logout
+├── portfolios/          # Portfolio rules, owner-scoped queries, use cases
 ├── http/                # Router, handlers, extractors, errors, OpenAPI
 └── infrastructure/
     ├── database.rs      # Connection pool setup

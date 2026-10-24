@@ -5,6 +5,7 @@
 
 mod m20261024_000001_create_users;
 mod m20261024_000002_create_user_sessions;
+mod m20261024_000003_create_portfolios;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait, async_trait};
 
@@ -16,6 +17,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20261024_000001_create_users::Migration),
             Box::new(m20261024_000002_create_user_sessions::Migration),
+            Box::new(m20261024_000003_create_portfolios::Migration),
         ]
     }
 }

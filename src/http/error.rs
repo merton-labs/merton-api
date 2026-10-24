@@ -9,6 +9,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::auth::{AuthError, FieldError};
+use crate::portfolios::PortfolioError;
 
 const PROBLEM_JSON: &str = "application/problem+json";
 /// Argon2 operations finish in well under a second, so capacity frees quickly.
@@ -61,6 +62,10 @@ pub enum ApiError {
     },
     NotFound,
     EmailTaken,
+    Conflict {
+        code: &'static str,
+        detail: &'static str,
+    },
     Validation(Vec<FieldError>),
     RateLimited(Duration),
     Overloaded,
@@ -94,6 +99,7 @@ impl ApiError {
                 "not_found",
                 "No resource exists at this path.".to_owned(),
             ),
+            Self::Conflict { code, detail } => (StatusCode::CONFLICT, code, (*detail).to_owned()),
             Self::EmailTaken => (
                 StatusCode::CONFLICT,
                 "email_taken",
@@ -173,6 +179,31 @@ impl From<AuthError> for ApiError {
             AuthError::Overloaded => Self::Overloaded,
             AuthError::Internal(err) => {
                 tracing::error!(error = %err, "internal error");
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<PortfolioError> for ApiError {
+    fn from(err: PortfolioError) -> Self {
+        match err {
+            PortfolioError::Validation(fields) => Self::Validation(fields),
+            PortfolioError::NotFound => Self::NotFound,
+            PortfolioError::Archived => Self::Conflict {
+                code: "portfolio_archived",
+                detail: "The portfolio is archived. Restore it before changing it.",
+            },
+            PortfolioError::NotArchived => Self::Conflict {
+                code: "portfolio_not_archived",
+                detail: "The portfolio is not archived.",
+            },
+            PortfolioError::HasFinancialHistory => Self::Conflict {
+                code: "portfolio_has_history",
+                detail: "The portfolio has financial history and cannot be deleted.",
+            },
+            PortfolioError::Database(err) => {
+                tracing::error!(error = %err, "portfolio database error");
                 Self::Internal
             }
         }

@@ -118,6 +118,14 @@ impl<'a> Req<'a> {
         Self::new(Method::POST, uri).header("origin", ORIGIN)
     }
 
+    pub fn patch(uri: &'a str) -> Self {
+        Self::new(Method::PATCH, uri).header("origin", ORIGIN)
+    }
+
+    pub fn delete(uri: &'a str) -> Self {
+        Self::new(Method::DELETE, uri).header("origin", ORIGIN)
+    }
+
     fn new(method: Method, uri: &'a str) -> Self {
         Self {
             method,

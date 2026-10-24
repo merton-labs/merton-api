@@ -31,6 +31,32 @@ async fn openapi_documents_endpoints_and_cookie_auth() {
         assert!(doc["paths"][path][method].is_object(), "{method} {path}");
     }
 
+    for (path, method) in [
+        ("/api/v1/portfolios", "get"),
+        ("/api/v1/portfolios", "post"),
+        ("/api/v1/portfolios/{id}", "get"),
+        ("/api/v1/portfolios/{id}", "patch"),
+        ("/api/v1/portfolios/{id}", "delete"),
+        ("/api/v1/portfolios/{id}/archive", "post"),
+        ("/api/v1/portfolios/{id}/restore", "post"),
+    ] {
+        let operation = &doc["paths"][path][method];
+        assert!(operation.is_object(), "{method} {path}");
+        assert!(
+            operation["security"].is_array(),
+            "{method} {path} needs a session"
+        );
+        if method != "get" {
+            let params = operation["parameters"].as_array().unwrap();
+            assert!(
+                params
+                    .iter()
+                    .any(|p| p["name"] == "X-CSRF-Token" && p["in"] == "header"),
+                "{method} {path} must document the CSRF header"
+            );
+        }
+    }
+
     let scheme = &doc["components"]["securitySchemes"]["session_cookie"];
     assert_eq!(scheme["type"], "apiKey");
     assert_eq!(scheme["in"], "cookie");

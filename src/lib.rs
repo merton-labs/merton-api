@@ -5,3 +5,4 @@ pub mod auth;
 pub mod config;
 pub mod http;
 pub mod infrastructure;
+pub mod portfolios;

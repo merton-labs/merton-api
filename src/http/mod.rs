@@ -4,6 +4,7 @@ mod auth;
 mod error;
 pub mod extract;
 mod health;
+mod portfolios;
 
 use axum::http::{HeaderValue, header};
 use axum::routing::{get, post};
@@ -26,11 +27,19 @@ use crate::app::AppState;
         auth::logout,
         auth::me,
         auth::csrf,
+        portfolios::create,
+        portfolios::list,
+        portfolios::get,
+        portfolios::update,
+        portfolios::archive,
+        portfolios::restore,
+        portfolios::delete,
     ),
     modifiers(&SessionCookieScheme),
     tags(
         (name = "health", description = "Service health"),
         (name = "auth", description = "Registration, login and sessions. Errors use RFC 9457 Problem Details."),
+        (name = "portfolios", description = "The current user's private portfolios. Other users' portfolios are reported as 404."),
     ),
 )]
 pub struct ApiDoc;
@@ -58,15 +67,25 @@ pub fn router(state: AppState) -> Router {
         .route("/logout", post(auth::logout))
         .route("/me", get(auth::me))
         .route("/csrf", get(auth::csrf))
-        .layer(SetResponseHeaderLayer::overriding(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store"),
-        ));
+        .layer(no_store());
+
+    let portfolios = Router::new()
+        .route("/", get(portfolios::list).post(portfolios::create))
+        .route(
+            "/{id}",
+            get(portfolios::get)
+                .patch(portfolios::update)
+                .delete(portfolios::delete),
+        )
+        .route("/{id}/archive", post(portfolios::archive))
+        .route("/{id}/restore", post(portfolios::restore))
+        .layer(no_store());
 
     let api_v1 = Router::new()
         .route("/health", get(health::health))
         .route("/openapi.json", get(openapi_json))
-        .nest("/auth", auth);
+        .nest("/auth", auth)
+        .nest("/portfolios", portfolios);
 
     Router::new()
         .nest("/api/v1", api_v1)
@@ -77,6 +96,11 @@ pub fn router(state: AppState) -> Router {
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
         .with_state(state)
+}
+
+/// Authentication and private financial data must never be cached.
+fn no_store() -> SetResponseHeaderLayer<HeaderValue> {
+    SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
 }
 
 async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {

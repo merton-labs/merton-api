@@ -178,6 +178,9 @@ Every decision uses the same fields:
   `src/http/<feature>.rs` handlers, and entities and migrations under
   `src/infrastructure/`. Do not reorganize existing modules without
   approval.
+- **P2A note:** portfolios followed this default (`src/portfolios/`,
+  `src/http/portfolios.rs`, `entities/portfolio.rs`). The organization
+  question is still Open.
 
 ### ADR-ARCH-04 — No speculative abstractions
 - **Status:** Accepted · **Source:** Owner · **Phases:** all
@@ -252,6 +255,27 @@ Every decision uses the same fields:
 - **Consequences:** Only the `sqlx-sqlite` driver feature is compiled in
   today.
 
+### ADR-DB-07 — Classifying SQLite `ON DELETE RESTRICT` refusals
+- **Status:** Accepted · **Source:** Implementation (P2A) · **Phases:** P2A onward
+- **Decision:** SQLite reports a refusal from `ON DELETE RESTRICT` as
+  `SQLITE_CONSTRAINT_TRIGGER` (code 1811), not as the usual foreign-key
+  code (787). SeaORM's `sql_err()` only recognises 787. To cover both,
+  `infrastructure::database::is_foreign_key_violation` matches either 787,
+  or 1811 combined with the message "FOREIGN KEY".
+- **Consequences:**
+  - Any code that maps foreign-key failures to an API error must use this
+    helper.
+  - It is the one place to adapt when PostgreSQL support is added.
+
+### ADR-DB-08 — `CHECK` constraints for enumerated columns
+- **Status:** Accepted · **Source:** Implementation (P2A) · **Phases:** P2A onward
+- **Decision:** Enumerated text columns get a portable `CHECK (col IN (…))`
+  constraint (for example `portfolios.status`), as defense in depth behind
+  the domain types.
+- **Consequences:** Only portable expressions are allowed, so no `GLOB`,
+  `REGEXP` or other SQLite-only functions. Format rules such as currency
+  codes stay in Rust.
+
 ---
 
 ## 5. API contract
@@ -283,6 +307,7 @@ Every decision uses the same fields:
   - `validation_failed`
   - `rate_limited`
   - `service_overloaded`
+  - `portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history` (P2A)
   - `internal_error`
 - **Consequences:** Never change an existing code's meaning. Never leak SQL
   errors, stack traces, secrets or other users' data; internal errors are
@@ -306,11 +331,17 @@ Every decision uses the same fields:
   - `503`: temporary overload
 
 ### ADR-API-04 — Offset pagination
-- **Status:** Accepted (mechanism) / **Open** (limits) · **Source:** Owner · **Phases:** P2A onward
+- **Status:** Accepted (mechanism) · **Proposed, implemented provisionally in P2A** (limits) · **Source:** Owner (mechanism), Implementation (P2A) (limits) · **Phases:** P2A onward
 - **Decision:** List endpoints accept `limit` and `offset`, return results in
   a stable deterministic order (with a unique tie-breaker, e.g. `id`), and
   enforce a maximum page size.
-- **Open:** the default and maximum page size. *Proposed:* default 50, maximum 200.
+- **Provisional values (awaiting owner confirmation):**
+  - `limit` defaults to 50 and may be 1–200.
+  - `offset` defaults to 0 and is capped at the database's signed 64-bit
+    maximum.
+  - Out-of-range values return `422`; non-numeric values return `400`.
+  - The response is `{items, total, limit, offset}`, where `total` is
+    counted in the same read transaction as the page.
 
 ### ADR-API-05 — Decimal values serialized as JSON strings
 - **Status:** Accepted · **Source:** Owner · **Phases:** P2B onward
@@ -326,6 +357,22 @@ Every decision uses the same fields:
 - **Decision:** The API sends no CORS headers. Wildcard CORS is prohibited.
 - **Consequences:** If a cross-origin frontend is ever required, it needs an
   owner decision and an explicit origin allow-list.
+
+### ADR-API-07 — Strict request shapes
+- **Status:** Accepted · **Source:** Implementation (P2A) · **Phases:** P2A onward
+- **Decision:**
+  - JSON request bodies use `#[serde(deny_unknown_fields)]`, so an attempt
+    to send `owner_user_id`, `status` or `id` is rejected with `400`, not
+    silently ignored.
+  - Unknown query parameters are ignored.
+  - A path ID that is not a valid UUID cannot name a resource and returns
+    `404 not_found`, the same as a missing or inaccessible one (extractor
+    `ResourceId`).
+
+### ADR-API-08 — `Cache-Control: no-store` on private routes
+- **Status:** Accepted · **Source:** Implementation (P1, P2A) · **Phases:** all
+- **Decision:** Authentication routes and every route that returns a user's
+  private data (portfolios onward) send `Cache-Control: no-store`.
 
 ---
 
@@ -519,19 +566,51 @@ Every decision uses the same fields:
   - `ACTIVE`: read, update and financial mutations are allowed.
   - `ARCHIVED`: read and export are allowed; financial mutations are
     prohibited; restore to `ACTIVE` is allowed.
-- **Open detail:** whether name or base-currency updates are allowed while
-  archived. See [PROJECT_PLAN.md §22](PROJECT_PLAN.md#22-open-questions).
+- **Updates while archived: Proposed, implemented provisionally in P2A.**
+  Renaming or changing the base currency of an archived portfolio returns
+  `409 portfolio_archived`. This follows the owner's lifecycle, which lists
+  updates only under `ACTIVE`. Awaiting owner confirmation; see
+  [PROJECT_PLAN.md §22](PROJECT_PLAN.md#22-open-questions).
+- **Implemented transitions (P2A):**
+  - archive from `ARCHIVED` returns `409 portfolio_archived`
+  - restore from `ACTIVE` returns `409 portfolio_not_archived`
+  - delete is allowed in either status (subject to ADR-PORT-04)
+  - every write is a single conditional `UPDATE … WHERE owner AND status`,
+    so concurrent requests cannot apply the same transition twice
 
 ### ADR-PORT-04 — Deletion only without financial history
 - **Status:** Accepted · **Source:** Owner · **Phases:** P2A onward
 - **Decision:** A portfolio can be permanently deleted only if it has no
   financial history. Posted financial records are never cascade-deleted.
 - **Consequences:**
-  - Foreign keys from financial tables to `portfolios` must use `RESTRICT`
-    (or `NO ACTION`), never `CASCADE`.
+  - Foreign keys from financial tables to `portfolios` must use immediate
+    (not deferrable) `RESTRICT`, never `CASCADE`.
   - The delete use case must check every financial table that exists at
     the time; each new phase extends that check.
-  - Deleting a portfolio with history returns `409`.
+  - Deleting a portfolio with history returns `409 portfolio_has_history`.
+- **P2A implementation:** no financial tables exist yet. Delete relies on
+  the FK backstop (ADR-DB-07): a refused delete maps to
+  `portfolio_has_history`, and a test proves this with a stand-in
+  `RESTRICT` table.
+  - The backstop cannot tell history apart from other references.
+  - P2B must add an explicit check, and must decide whether an unused cash
+    account blocks deletion or is removed in the same transaction (open
+    question).
+  - Another user's portfolio still returns `404`, because the delete never
+    matches its row.
+
+### ADR-PORT-05 — Base currency format
+- **Status:** **Proposed, implemented provisionally in P2A** · **Source:** Implementation (P2A) · **Phases:** P2A
+- **Decision:** A base currency is any three ASCII letters, trimmed and
+  stored uppercased. It is not checked against the ISO 4217 list.
+- **Consequences:** Tightening to the ISO list later would only affect new
+  writes; existing values would need a migration plan. Awaiting owner
+  confirmation.
+
+### ADR-PORT-06 — Portfolio name
+- **Status:** Accepted · **Source:** Implementation (P2A) · **Phases:** P2A
+- **Decision:** A name is trimmed and must be 1–100 characters with no
+  control characters. Names are not unique per owner.
 
 ---
 
@@ -911,9 +990,11 @@ Every decision uses the same fields:
 
 | ID | Topic | Blocks |
 | --- | --- | --- |
-| ADR-ARCH-03 | Feature-first vs layer-first module organization | P2A (or explicit approval to continue the current hybrid) |
-| ADR-API-04 | Default and maximum page size | P2A |
-| ADR-PORT-03 | Whether archived portfolios may be renamed or change base currency | P2A |
+| ADR-ARCH-03 | Feature-first vs layer-first module organization (P2A used the current hybrid) | P2B onward |
+| ADR-API-04 | Confirm page size 50 / 200 (implemented provisionally) | Confirmation only |
+| ADR-PORT-03 | Confirm archived portfolios cannot be updated (implemented provisionally) | Confirmation only |
+| ADR-PORT-05 | Confirm format-only currency validation (implemented provisionally) | Confirmation only |
+| ADR-PORT-04 | Whether an unused cash account blocks portfolio deletion | P2B |
 | ADR-INST-04 | Representation of bank deposits (incl. fixed-term) | P2B |
 | ADR-NUM-02 / NUM-04 | Decimal column types and precision limits per numeric kind | P2B |
 | ADR-LEDG-02 | Physical ledger schema | P3 |

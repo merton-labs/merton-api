@@ -3,7 +3,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Request};
+use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Path, Query, Request};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, header};
 use axum_extra::extract::cookie::CookieJar;
@@ -43,6 +43,39 @@ where
             }
             Err(err) => Err(ApiError::BadRequest(err.body_text())),
         }
+    }
+}
+
+/// `Query<T>` whose rejections are Problem Details (400).
+pub struct ApiQuery<T>(pub T);
+
+impl<T, S> FromRequestParts<S> for ApiQuery<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Query(value)| Self(value))
+            .map_err(|err| ApiError::BadRequest(err.body_text()))
+    }
+}
+
+/// A resource ID from the path. A malformed ID cannot name any resource, so
+/// it is reported as `404`, the same as a missing or inaccessible one.
+pub struct ResourceId(pub uuid::Uuid);
+
+impl<S: Send + Sync> FromRequestParts<S> for ResourceId {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        Path::<uuid::Uuid>::from_request_parts(parts, state)
+            .await
+            .map(|Path(id)| Self(id))
+            .map_err(|_| ApiError::NotFound)
     }
 }
 

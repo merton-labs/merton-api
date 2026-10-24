@@ -33,7 +33,8 @@ separate repository.
 | P0 (foundation) | Completed |
 | P1 (authentication) | Completed |
 | P1.1 (auth hardening) | Completed |
-| P2A (portfolios) | Next; not started |
+| P2A (portfolios) | Completed (some decisions provisional; see §17) |
+| P2B (instruments, cash accounts) | Next; not started |
 
 ## 2. Product Goals
 
@@ -126,6 +127,7 @@ src/
 ├── lib.rs
 ├── app.rs                  # AppState, Security, startup, migrations, graceful shutdown
 ├── config.rs               # env configuration + validation
+├── portfolios/             # portfolio domain types, owner-scoped repository, service
 ├── auth/                   # framework-independent authentication logic
 │   ├── email.rs  password.rs  session.rs  csrf.rs  rate_limit.rs
 │   ├── repository.rs       # SeaORM queries (plain functions)
@@ -137,11 +139,11 @@ src/
 │   └── error.rs            # ApiError → RFC 9457 Problem Details
 └── infrastructure/
     ├── database.rs         # pool + SQLite pragmas (only SQLite-specific code)
-    ├── entities/           # user.rs, user_session.rs
-    └── migrations/         # m20261024_000001_create_users, m20261024_000002_create_user_sessions
+    ├── entities/           # user.rs, user_session.rs, portfolio.rs
+    └── migrations/         # m20261024_000001_create_users, …_000002_create_user_sessions, …_000003_create_portfolios
 tests/
 ├── common/mod.rs           # TestApp harness: isolated in-memory SQLite per test
-├── auth.rs  database.rs  http.rs
+├── auth.rs  database.rs  http.rs  portfolios.rs
 ```
 
 **Module organization** is OPEN (ADR-ARCH-03). Until the owner decides,
@@ -169,7 +171,7 @@ Implemented tables are marked ✅; everything else is planned.
 | --- | --- | --- | --- |
 | `users` ✅ | — | P1 | `id` UUID, `email`, `normalized_email` UNIQUE, `password_hash` (PHC), timestamps |
 | `user_sessions` ✅ | user | P1 | `token_hash` UNIQUE (32-byte SHA-256), `user_id` FK→users (CASCADE), idle/absolute expiry, `revoked_at` |
-| `portfolios` | user (immutable) | P2A | name, base currency, status `ACTIVE`/`ARCHIVED`, timestamps |
+| `portfolios` ✅ | user (immutable) | P2A | `owner_user_id` FK→users (RESTRICT), `name`, `base_currency`, `status` CHECK `ACTIVE`/`ARCHIVED`, timestamps |
 | `instruments` | user | P2B | asset class, symbol/ISIN/exchange (optional, non-unique), quote currency, typed JSON metadata |
 | `cash_accounts` | portfolio | P2B | name, single currency; many per portfolio |
 | `transactions` | portfolio | P3/P4 | type, transaction date, `sort_order`, fees/taxes, references to instrument/cash accounts |
@@ -375,8 +377,8 @@ ADR-API-01 … API-06:
 | **P0** | Project Foundation | ✅ Completed (`e67300d`, CI green) |
 | **P1** | Authentication & Session Management | ✅ Completed (`10a35ac`, CI green) |
 | **P1.1** | Authentication Security Hardening | ✅ Completed (`8e646a1`, CI green) |
-| **P2A** | Portfolio CRUD & Ownership | ⏳ Not started (next) |
-| **P2B** | Instruments & Cash Accounts | Not started |
+| **P2A** | Portfolio CRUD & Ownership | ✅ Completed (verified locally; record commit + CI on merge) |
+| **P2B** | Instruments & Cash Accounts | ⏳ Not started (next) |
 | **P3** | Transaction Ledger & FIFO | Not started |
 | **P4** | Financial Transactions & Corporate Actions | Not started |
 | **P5** | Valuation, FX & Asset Allocation | Not started |
@@ -399,8 +401,8 @@ flowchart LR
 
 | Phase | Hard prerequisites | Decisions needed before starting |
 | --- | --- | --- |
-| P2A | P1.1 | ADR-ARCH-03 (or explicit OK to keep hybrid), ADR-API-04 page size, ADR-PORT-03 archived-update rule |
-| P2B | P2A | ADR-INST-04 bank deposits, ADR-NUM-02/04 decimal storage & limits |
+| P2A ✅ | P1.1 | Done; provisional choices await confirmation (ADR-API-04, ADR-PORT-03, ADR-PORT-05) |
+| P2B | P2A | ADR-INST-04 bank deposits, ADR-NUM-02/04 decimal storage & limits, ADR-PORT-04 unused cash accounts vs deletion, ADR-ARCH-03 layout |
 | P3 | P2B | ADR-LEDG-02 physical schema, ADR-LEDG-08 `sort_order`, ADR-NUM-05 rounding (for trades) |
 | P4 | P3 | ADR-TXN-01 Tax Return, ADR-TXN-04 fee placement, ADR-TXN-07 corporate-action allocation |
 | P5 | P3, P4 | ADR-VAL-02 staleness threshold |
@@ -479,58 +481,84 @@ P2A onward are *Proposed* until they are implemented.
   session cleanup.
 
 ### P2A — Portfolio CRUD & Ownership
-- **Status:** ⏳ Not started (next recommended task).
+- **Status:** ✅ Completed. Verified locally: all four CI commands pass and
+  there are 22 portfolio integration tests. Record the commit and CI run
+  here once it is merged.
 - **Objective:** private portfolios with enforced ownership. This
   establishes the owner-scoping pattern every later feature reuses.
-- **Dependencies:** P1.1. The decisions in §16 must be made first.
-- **Scope:** create, list, get, update (name, base currency), archive,
-  restore, delete-if-empty.
-- **Expected files:**
-  - `src/portfolios/{mod,service,repository}.rs` (domain types and rules)
-  - `src/http/portfolios.rs`
+- **Dependencies:** P1.1.
+- **Provisional decisions:** these were implemented with the most
+  conservative option and **still need owner confirmation**:
+  - ADR-API-04: page size 50, maximum 200
+  - ADR-PORT-03: archived portfolios cannot be updated
+  - ADR-PORT-05: the currency code's format is checked, not the ISO list
+  - The module layout followed the current hybrid default (ADR-ARCH-03 is
+    still Open).
+- **Files:**
+  - `src/portfolios/mod.rs`: domain types (`PortfolioName`, `CurrencyCode`,
+    `PortfolioStatus`, `Page`, `PortfolioError`)
+  - `src/portfolios/repository.rs`: owner-scoped queries that take
+    `auth::UserId`
+  - `src/portfolios/service.rs`: use cases
+  - `src/http/portfolios.rs`: handlers, DTOs and OpenAPI
+  - `src/http/extract.rs`: `ApiQuery`, `ResourceId`
+  - `src/http/error.rs`: `Conflict` codes
+  - `src/infrastructure/database.rs`: `is_foreign_key_violation`
   - `src/infrastructure/entities/portfolio.rs`
-  - `src/infrastructure/migrations/m<date>_create_portfolios.rs`
+  - `src/infrastructure/migrations/m20261024_000003_create_portfolios.rs`
   - `tests/portfolios.rs`
 - **Database:** a `portfolios` table:
   - columns: `id` UUID PK, `owner_user_id` FK→`users.id`
-    (`ON DELETE RESTRICT`), `name`, `base_currency` (3-letter code),
-    `status` (`ACTIVE`/`ARCHIVED`), `created_at`, `updated_at`
-  - an index on `owner_user_id`
-  - no column lets the owner change
-- **API (Proposed):**
+    (`ON DELETE RESTRICT`), `name` (≤100), `base_currency` (3),
+    `status` with `CHECK IN ('ACTIVE','ARCHIVED')`, `created_at`,
+    `updated_at`
+  - index `idx_portfolios_owner_created (owner_user_id, created_at, id)`
+- **API (implemented):**
 
   | Method & path | Purpose | Returns |
   | --- | --- | --- |
-  | `POST /api/v1/portfolios` | create | 201 |
-  | `GET /api/v1/portfolios?limit&offset&status` | list owned | 200, stable order |
+  | `POST /api/v1/portfolios` | create | 201 + `Location` / 400 / 415 / 422 |
+  | `GET /api/v1/portfolios?limit&offset&status` | list owned | 200 `{items,total,limit,offset}` / 400 / 422 |
   | `GET /api/v1/portfolios/{id}` | get | 200 / 404 |
-  | `PATCH /api/v1/portfolios/{id}` | update name, base currency | 200 / 404 / 409 / 422 |
-  | `POST /api/v1/portfolios/{id}/archive` | archive | 200 / 404 / 409 |
-  | `POST /api/v1/portfolios/{id}/restore` | restore | 200 / 404 / 409 |
-  | `DELETE /api/v1/portfolios/{id}` | delete | 204 / 404 / 409 |
+  | `PATCH /api/v1/portfolios/{id}` | update name and/or base currency | 200 / 404 / 409 `portfolio_archived` / 422 |
+  | `POST /api/v1/portfolios/{id}/archive` | archive | 200 / 404 / 409 `portfolio_archived` |
+  | `POST /api/v1/portfolios/{id}/restore` | restore | 200 / 404 / 409 `portfolio_not_archived` |
+  | `DELETE /api/v1/portfolios/{id}` | delete (any status) | 204 / 404 / 409 `portfolio_has_history` |
 
-  All mutations use `CsrfProtectedSession`. Owner identity is never
-  accepted from the request.
+  - **Session and CSRF:** every mutation uses `CsrfProtectedSession`; reads
+    use `CurrentSession`.
+  - **Request shape:** request bodies reject unknown fields, including
+    `owner_user_id`.
+  - **IDs:** a malformed `{id}` returns 404.
+  - **Caching:** responses carry `Cache-Control: no-store`.
 - **Validation:**
-  - name: trimmed, non-empty, max length to be fixed in implementation
-  - base currency: a 3-letter uppercase code. Whether to validate against
-    the full ISO 4217 list is to be confirmed.
-- **Delete rule:** allowed only without financial history. P2A has no
-  financial tables yet, but the delete use case must be built so that
-  later phases add their checks to it (ADR-PORT-04).
-- **Tests:**
-  - **CRUD and lifecycle:** each operation, archive/restore transitions,
-    and invalid transitions (409)
-  - **Validation:** name and currency rules (422)
-  - **Pagination:** order is stable; limits are enforced
-  - **Cross-user:** user B gets 404 on get, update, archive, restore and
-    delete of A's portfolio, and B's list never contains A's portfolios
-  - **Request identity:** `owner_user_id` in the body is ignored or
-    rejected
-  - **CSRF:** every mutation without a CSRF token is rejected (403)
-  - **OpenAPI:** the document contains every new path and schema
-  - **Migration:** applied on a fresh database
-- **Acceptance:** see §18.
+  - name: trimmed, 1–100 characters, no control characters
+  - base currency: three ASCII letters, stored uppercased
+- **Delete rule:**
+  - P2A has no financial tables.
+  - Delete relies on the FK backstop (ADR-DB-07), which is proven by a
+    test with a stand-in `RESTRICT` table.
+  - **P2B must add an explicit history check** (ADR-PORT-04).
+- **Tests (22):**
+  - **Create:** normalization; validation; owner spoofing and unknown
+    fields
+  - **List:** isolation and order; stable pagination; tie-break by `id`
+    when `created_at` is equal; status filter; paging bounds
+  - **Get and update:** get and 404; update and validation
+  - **Lifecycle:** lifecycle rules; 8 concurrent archives apply exactly
+    once
+  - **Delete:** delete in any status; delete refused with history;
+    another user's portfolio with history is still 404
+  - **Cross-user:** every operation gives the same 404 body as a missing
+    ID
+  - **Request protection:** CSRF required on all mutations; a session
+    required on reads; untrusted origin rejected; query-supplied owner
+    ignored
+  - **Schema:** user FK `RESTRICT`; index exists; the `CHECK` constraint
+    rejects bad status values
+  - **Elsewhere:** the OpenAPI paths, security and CSRF parameter are
+    asserted in `tests/http.rs`. An existing Phase 1 database upgraded
+    cleanly (smoke-tested).
 - **Excluded:** cash accounts, instruments, transactions, valuation, and
   any decimal financial values.
 
@@ -699,12 +727,13 @@ P2A onward are *Proposed* until they are implemented.
   - a cancelled request does not release a permit early
   - overload returns 503 uniformly
 - **P2A:**
-  - [ ] The owner comes only from the session.
-  - [ ] Another user's portfolio is indistinguishable from a missing one
+  - [x] The owner comes only from the session.
+  - [x] Another user's portfolio is indistinguishable from a missing one
         (404).
-  - [ ] Archive and restore follow ADR-PORT-03.
-  - [ ] Delete is gated by the financial-history check.
-  - [ ] List pagination is stable and bounded.
+  - [x] Archive and restore follow ADR-PORT-03.
+  - [x] Delete is gated by the financial-history check (an FK backstop
+        until financial tables exist).
+  - [x] List pagination is stable and bounded.
 - **P2B:**
   - [ ] Instruments and cash accounts are owner-consistent.
   - [ ] Currency is validated.
@@ -744,7 +773,7 @@ The strategy is risk-based testing with incremental development (ADR-QA-01).
 | OpenAPI | Assert paths, schemas, security schemes exist | `tests/http.rs` |
 | Migrations | Fresh-DB apply; constraint behaviour | `tests/database.rs` |
 
-Current suite at `8e646a1`: **92 tests** (49 unit + 43 integration). All pass.
+Current suite after P2A: **118 tests** (53 unit + 65 integration). All pass.
 
 Commands:
 
@@ -803,14 +832,15 @@ These need project-owner decisions. Do not resolve them silently in code;
 the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-decisions-summary).
 
 1. **ADR-ARCH-03:** feature-first vs layer-first, or keep the current
-   hybrid?
-2. **ADR-API-04:** default and maximum page size (proposed 50/200).
-3. **ADR-PORT-03:** may archived portfolios be renamed or have their base
-   currency changed?
+   hybrid? P2A followed the hybrid.
+2. **ADR-API-04:** confirm page size 50 / 200. *Implemented
+   provisionally.*
+3. **ADR-PORT-03:** confirm that archived portfolios cannot be renamed or
+   have their base currency changed. *Implemented provisionally (409).*
 4. **ADR-PORT-04:** does a cash account with no movements count as
-   "financial history" for portfolio deletion?
-5. **P2A validation:** validate base currency against the full ISO 4217
-   list, or by format only?
+   "financial history" for portfolio deletion? *Needed for P2B.*
+5. **ADR-PORT-05:** confirm format-only base-currency validation, rather
+   than the ISO 4217 list. *Implemented provisionally.*
 6. **ADR-INST-04:** how are bank deposits represented, including
    fixed-term deposits?
 7. **ADR-NUM-02/04:** decimal column storage, and precision limits per
@@ -829,8 +859,9 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
 
 ## 23. Current Implementation Status
 
-Verified against the source, the tests and GitHub Actions at commit
-`8e646a1` on `main`.
+Verified against the source and the tests. P0–P1.1 are also verified
+against GitHub Actions (commit `8e646a1`). P2A is verified locally, and its
+commit and CI run are pending.
 
 | Area | Status | Evidence |
 | --- | --- | --- |
@@ -842,8 +873,9 @@ Verified against the source, the tests and GitHub Actions at commit
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 92 passing | `cargo test --locked`; CI green on `8e646a1` |
-| Portfolios (P2A) | ❌ Not started | no `portfolios` table, entity or routes |
+| Tests | ✅ 118 passing | `cargo test --locked` (local) |
+| Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
+| FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ❌ Not started | — |
 | Ledger, FIFO (P3) | ❌ Not started | — |
 | Financial transactions (P4) | ❌ Not started | — |
@@ -854,31 +886,37 @@ Verified against the source, the tests and GitHub Actions at commit
 
 ## 24. Next Recommended Task
 
-**P2A — Portfolio CRUD & Ownership.**
+**P2B — Instruments & Cash Accounts.**
 
 Prerequisites:
 
-1. Get owner decisions on open questions 1–5 (§22). At minimum, the owner
-   must explicitly approve or reject keeping the current hybrid module
-   layout.
-2. Start from a clean `main` with CI green.
-3. Read this plan, ARCHITECTURE_DECISIONS.md and CLAUDE.md, then the
-   existing auth code. In particular, read `src/http/extract.rs` (session
-   and CSRF extractors) and `src/auth/mod.rs` (`UserId`).
+1. Owner confirmation of the P2A provisional choices: open questions 2,
+   3 and 5 in §22. If any is rejected, adjust P2A first.
+2. Owner decisions needed before P2B code:
+   - **ADR-INST-04:** how bank deposits are represented
+   - **ADR-NUM-02/04:** decimal storage and precision limits, needed if
+     any P2B field is a decimal
+   - **ADR-PORT-04:** whether an unused cash account blocks portfolio
+     deletion
+   - **ADR-ARCH-03:** the module layout
+3. Start from a clean `main` with P2A committed and CI green. Then record
+   the P2A commit in §15, §17 and §23.
 
-Implementation outline, in order:
+Implementation notes:
 
-1. Write the migration and the entity.
-2. Write the domain validation: name and currency.
-3. Write the owner-scoped repository functions. Every query filters by
-   `owner_user_id`.
-4. Write the service: lifecycle transitions and a delete guard that later
-   phases can extend.
-5. Write the handlers, using `CurrentSession` for reads and
-   `CsrfProtectedSession` for mutations.
-6. Add the OpenAPI annotations.
-7. Write the tests listed in §17 P2A, including cross-user tests.
-8. Update the README, §23 and §24.
+- **Ownership:**
+  - Instruments are user-scoped; their repository functions take
+    `auth::UserId`.
+  - Cash accounts are scoped through the portfolio. Every query joins or
+    filters on a portfolio owned by the user.
+- **Archived portfolios:** cash-account mutations are rejected while the
+  portfolio is `ARCHIVED`, using the same conditional-write pattern as P2A.
+- **Foreign keys:** `cash_accounts.portfolio_id` uses immediate
+  `ON DELETE RESTRICT`.
+- **Portfolio delete:** extend `portfolios::service::delete` with an
+  explicit cash-account check, implementing the ADR-PORT-04 decision.
+- **Reused pieces:** `ResourceId`, `ApiQuery`, `Page`,
+  `CsrfProtectedSession`, `is_foreign_key_violation`, and the
+  `tests/portfolios.rs` cross-user pattern.
 
-Out of scope for P2A: any financial values, cash accounts, instruments or
-transactions.
+Out of scope for P2B: prices, FX rates, transactions and movements.
