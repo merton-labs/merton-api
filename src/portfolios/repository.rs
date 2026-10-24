@@ -117,6 +117,25 @@ pub async fn transition(
     Ok(result.rows_affected)
 }
 
+/// Touches an owned portfolio as the first write of a transaction. Returns
+/// rows changed (0 when not owned). On SQLite the write takes the database
+/// write lock, so concurrent cash-account writes wait until the transaction
+/// ends. PostgreSQL support must add row locking to the guarded writes.
+pub async fn lock_owned(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    id: Uuid,
+    now: OffsetDateTime,
+) -> Result<u64, DbErr> {
+    let result = Entity::update_many()
+        .col_expr(Column::UpdatedAt, Expr::value(now))
+        .filter(Column::OwnerUserId.eq(owner.as_uuid()))
+        .filter(Column::Id.eq(id))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected)
+}
+
 pub async fn delete(db: &impl ConnectionTrait, owner: UserId, id: Uuid) -> Result<u64, DbErr> {
     let result = Entity::delete_many()
         .filter(Column::OwnerUserId.eq(owner.as_uuid()))

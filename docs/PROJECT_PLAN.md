@@ -33,8 +33,9 @@ separate repository.
 | P0 (foundation) | Completed |
 | P1 (authentication) | Completed |
 | P1.1 (auth hardening) | Completed |
-| P2A (portfolios) | Completed (some decisions provisional; see §17) |
-| P2B (instruments, cash accounts) | Next; not started |
+| P2A (portfolios) | Completed (`c5e812d`, CI green; some decisions provisional) |
+| P2B (instruments, cash accounts) | Completed (some decisions provisional; see §17) |
+| P3 (ledger, FIFO) | Next; not started |
 
 ## 2. Product Goals
 
@@ -128,6 +129,10 @@ src/
 ├── app.rs                  # AppState, Security, startup, migrations, graceful shutdown
 ├── config.rs               # env configuration + validation
 ├── portfolios/             # portfolio domain types, owner-scoped repository, service
+├── instruments/            # instrument types (asset class, ISIN), owner-scoped repository, service
+├── cash_accounts/          # cash accounts owned through their portfolio
+├── validation.rs           # shared DisplayName, CurrencyCode, field-error collector
+├── pagination.rs           # shared Page / Paged
 ├── auth/                   # framework-independent authentication logic
 │   ├── email.rs  password.rs  session.rs  csrf.rs  rate_limit.rs
 │   ├── repository.rs       # SeaORM queries (plain functions)
@@ -139,11 +144,11 @@ src/
 │   └── error.rs            # ApiError → RFC 9457 Problem Details
 └── infrastructure/
     ├── database.rs         # pool + SQLite pragmas (only SQLite-specific code)
-    ├── entities/           # user.rs, user_session.rs, portfolio.rs
-    └── migrations/         # m20261024_000001_create_users, …_000002_create_user_sessions, …_000003_create_portfolios
+    ├── entities/           # user, user_session, portfolio, instrument, cash_account
+    └── migrations/         # m20261024_000001 … m20261024_000005
 tests/
 ├── common/mod.rs           # TestApp harness: isolated in-memory SQLite per test
-├── auth.rs  database.rs  http.rs  portfolios.rs
+├── auth.rs  database.rs  http.rs  portfolios.rs  instruments.rs  cash_accounts.rs
 ```
 
 **Module organization** is OPEN (ADR-ARCH-03). Until the owner decides,
@@ -172,8 +177,8 @@ Implemented tables are marked ✅; everything else is planned.
 | `users` ✅ | — | P1 | `id` UUID, `email`, `normalized_email` UNIQUE, `password_hash` (PHC), timestamps |
 | `user_sessions` ✅ | user | P1 | `token_hash` UNIQUE (32-byte SHA-256), `user_id` FK→users (CASCADE), idle/absolute expiry, `revoked_at` |
 | `portfolios` ✅ | user (immutable) | P2A | `owner_user_id` FK→users (RESTRICT), `name`, `base_currency`, `status` CHECK `ACTIVE`/`ARCHIVED`, timestamps |
-| `instruments` | user | P2B | asset class, symbol/ISIN/exchange (optional, non-unique), quote currency, typed JSON metadata |
-| `cash_accounts` | portfolio | P2B | name, single currency; many per portfolio |
+| `instruments` ✅ | user | P2B | `asset_class` CHECK (STOCK/ETF/MUTUAL_FUND), `name`, optional non-unique `symbol`/`isin`/`exchange`, fixed `quote_currency`; metadata column deferred |
+| `cash_accounts` ✅ | portfolio | P2B | `portfolio_id` FK (RESTRICT), `name`, fixed `currency`; many per portfolio |
 | `transactions` | portfolio | P3/P4 | type, transaction date, `sort_order`, fees/taxes, references to instrument/cash accounts |
 | `position_movements` | transaction | P3/P4 | quantity changes per instrument (source of holdings and FIFO lots) |
 | `cash_movements` | transaction | P3/P4 | amount changes per cash account (source of balances) |
@@ -377,9 +382,9 @@ ADR-API-01 … API-06:
 | **P0** | Project Foundation | ✅ Completed (`e67300d`, CI green) |
 | **P1** | Authentication & Session Management | ✅ Completed (`10a35ac`, CI green) |
 | **P1.1** | Authentication Security Hardening | ✅ Completed (`8e646a1`, CI green) |
-| **P2A** | Portfolio CRUD & Ownership | ✅ Completed (verified locally; record commit + CI on merge) |
-| **P2B** | Instruments & Cash Accounts | ⏳ Not started (next) |
-| **P3** | Transaction Ledger & FIFO | Not started |
+| **P2A** | Portfolio CRUD & Ownership | ✅ Completed (`c5e812d`, CI green) |
+| **P2B** | Instruments & Cash Accounts | ✅ Completed (verified locally; record commit + CI on merge) |
+| **P3** | Transaction Ledger & FIFO | ⏳ Not started (next) |
 | **P4** | Financial Transactions & Corporate Actions | Not started |
 | **P5** | Valuation, FX & Asset Allocation | Not started |
 | **P6** | CSV Import & Export | Not started |
@@ -402,7 +407,7 @@ flowchart LR
 | Phase | Hard prerequisites | Decisions needed before starting |
 | --- | --- | --- |
 | P2A ✅ | P1.1 | Done; provisional choices await confirmation (ADR-API-04, ADR-PORT-03, ADR-PORT-05) |
-| P2B | P2A | ADR-INST-04 bank deposits, ADR-NUM-02/04 decimal storage & limits, ADR-PORT-04 unused cash accounts vs deletion, ADR-ARCH-03 layout |
+| P2B ✅ | P2A | Done; provisional choices await confirmation (ADR-INST-04, ADR-PORT-04, ADR-INST-02) |
 | P3 | P2B | ADR-LEDG-02 physical schema, ADR-LEDG-08 `sort_order`, ADR-NUM-05 rounding (for trades) |
 | P4 | P3 | ADR-TXN-01 Tax Return, ADR-TXN-04 fee placement, ADR-TXN-07 corporate-action allocation |
 | P5 | P3, P4 | ADR-VAL-02 staleness threshold |
@@ -481,9 +486,8 @@ P2A onward are *Proposed* until they are implemented.
   session cleanup.
 
 ### P2A — Portfolio CRUD & Ownership
-- **Status:** ✅ Completed. Verified locally: all four CI commands pass and
-  there are 22 portfolio integration tests. Record the commit and CI run
-  here once it is merged.
+- **Status:** ✅ Completed. Commit `c5e812d`; CI green. There are 22
+  portfolio integration tests.
 - **Objective:** private portfolios with enforced ownership. This
   establishes the owner-scoping pattern every later feature reuses.
 - **Dependencies:** P1.1.
@@ -563,34 +567,100 @@ P2A onward are *Proposed* until they are implemented.
   any decimal financial values.
 
 ### P2B — Instruments & Cash Accounts
-- **Status:** Not started.
+- **Status:** ✅ Completed. Verified locally: all four CI commands pass and
+  there are 150 tests in total. Record the commit and CI run here once it
+  is merged.
 - **Objective:** the reference data the ledger needs.
-- **Dependencies:** P2A. Decisions ADR-INST-04 and ADR-NUM-02/04 must be
-  made first.
-- **Scope:**
-  - user-scoped instruments: asset class, optional symbol/ISIN/exchange,
-    fixed quote currency, typed JSON metadata, duplicates allowed
-  - cash accounts per portfolio: name and one currency, with many per
-    portfolio allowed
-  - ownership consistency and currency validation
-- **Expected files:**
-  - `src/instruments/`, `src/cash_accounts/` (or one module if ADR-ARCH-03 says so)
+- **Dependencies:** P2A.
+- **Provisional decisions:** these were implemented with the most
+  conservative option and **still need owner confirmation**:
+  - ADR-INST-04: bank deposits are plain cash accounts
+  - ADR-PORT-04: deleting a portfolio also deletes its unused cash accounts
+  - ADR-INST-02: the typed JSON metadata column is deferred until an
+    asset-specific attribute is defined
+  - P2B has no decimal fields, so ADR-NUM-02/04 move to P3, and
+    `rust_decimal` is still not added.
+- **Files:**
+  - `src/instruments/{mod,repository,service}.rs`
+  - `src/cash_accounts/{mod,repository,service}.rs`
   - `src/http/{instruments,cash_accounts}.rs`
-  - entities and migrations
+  - shared `src/validation.rs` and `src/pagination.rs` (moved out of P2A's
+    `portfolios`)
+  - `ResourceIds` in `src/http/extract.rs`
+  - migrations `m20261024_000004_create_instruments` and
+    `m20261024_000005_create_cash_accounts`
   - `tests/{instruments,cash_accounts}.rs`
-  - `rust_decimal` is introduced here if any decimal field is needed
 - **Database:**
-  - `instruments`: `owner_user_id` FK, no uniqueness on symbol or ISIN
-  - `cash_accounts`: `portfolio_id` FK `RESTRICT`
-- **API (Proposed):**
-  - `/api/v1/instruments` CRUD
-  - `/api/v1/portfolios/{id}/cash-accounts` CRUD
-  - cash-account mutations are rejected when the portfolio is `ARCHIVED`
-- **Tests:** CRUD, validation, duplicate identities allowed, cross-user 404
-  for both resources, a cash account cannot attach to another user's
-  portfolio, archived-portfolio rules, and the delete rules (instrument or
-  account in use → 409, once P3 exists).
-- **Excluded:** prices, FX rates, transactions.
+  - **`instruments`:**
+    - `owner_user_id` FK→users (`RESTRICT`)
+    - `asset_class` with `CHECK IN ('STOCK','ETF','MUTUAL_FUND')`
+    - `name` (≤200)
+    - optional `symbol`/`exchange` (≤32) and `isin` (12), none unique
+    - `quote_currency` (3)
+    - timestamps
+    - index `(owner_user_id, created_at, id)`
+  - **`cash_accounts`:**
+    - `portfolio_id` FK→portfolios (`RESTRICT`)
+    - `name` (≤100), `currency` (3), timestamps
+    - index `(portfolio_id, created_at, id)`
+- **API (implemented):**
+
+  | Method & path | Purpose | Returns |
+  | --- | --- | --- |
+  | `POST /api/v1/instruments` | create | 201 + `Location` / 400 / 415 / 422 |
+  | `GET /api/v1/instruments?limit&offset&asset_class` | list owned | 200 `{items,total,limit,offset}` / 400 / 422 |
+  | `GET /api/v1/instruments/{id}` | get | 200 / 404 |
+  | `PATCH /api/v1/instruments/{id}` | update descriptive fields (`null` clears optional ones) | 200 / 400 (incl. `quote_currency`) / 404 / 422 |
+  | `DELETE /api/v1/instruments/{id}` | delete | 204 / 404 / 409 `instrument_in_use` |
+  | `POST /api/v1/portfolios/{id}/cash-accounts` | create | 201 + `Location` / 404 / 409 `portfolio_archived` / 422 |
+  | `GET /api/v1/portfolios/{id}/cash-accounts` | list | 200 / 404 |
+  | `GET /api/v1/portfolios/{id}/cash-accounts/{account_id}` | get | 200 / 404 |
+  | `PATCH /api/v1/portfolios/{id}/cash-accounts/{account_id}` | rename | 200 / 400 (incl. `currency`) / 404 / 409 `portfolio_archived` / 422 |
+  | `DELETE /api/v1/portfolios/{id}/cash-accounts/{account_id}` | delete | 204 / 404 / 409 `portfolio_archived` or `cash_account_in_use` |
+
+- **Write safety:**
+  - Cash-account writes are single statements guarded by `EXISTS
+    (portfolio owned by the caller AND ACTIVE)`, either as
+    `INSERT … SELECT` or as `UPDATE`/`DELETE … WHERE EXISTS`.
+  - Portfolio delete is one transaction: a guarded write that is both the
+    ownership check and the lock (ADR-DB-09), then delete the unused cash
+    accounts, then delete the portfolio.
+  - An AGY review found that a read-first delete transaction failed under
+    concurrency. A stress test confirmed it: 14 of 20 deletes failed before
+    the fix, and 0 failed after.
+- **Tests:** 13 for instruments, 14 for cash accounts, and 1 extra portfolio
+  test for `null` in PATCH.
+  - **Instruments** (written by an AGY worker in an isolated worktree,
+    reviewed and run by Claude):
+    - create: normalization; validation, including the ISIN check digit;
+      unknown asset class and fields
+    - duplicates allowed
+    - list filtering and pagination bounds
+    - get and update, including `null` clearing; the quote currency is
+      immutable
+    - delete is refused while in use, and another user gets 404 for it
+    - cross-user isolation; CSRF and session requirements
+    - schema: `CHECK` constraint and user FK
+  - **Cash accounts:**
+    - several accounts per currency
+    - validation; unknown fields
+    - list scoping and pagination
+    - rename only; the currency is immutable
+    - delete
+    - wrong-portfolio access gives 404
+    - cross-user tests on 8 operations give the same 404 body as a missing
+      ID
+    - archived: reads allowed, changes 409
+    - an account with movements cannot be deleted
+    - portfolio delete removes unused accounts
+    - a portfolio with account history is fully rolled back
+    - the database refuses to orphan accounts; CSRF and session
+      requirements
+  - **Mutation checks:** removing the instrument owner filter, the
+    cash-account owner `EXISTS`, or the ACTIVE guard each makes the tests
+    fail.
+- **Excluded:** prices, FX rates, transactions and movements, and
+  instrument metadata.
 
 ### P3 — Transaction Ledger & FIFO
 - **Status:** Not started.
@@ -735,9 +805,9 @@ P2A onward are *Proposed* until they are implemented.
         until financial tables exist).
   - [x] List pagination is stable and bounded.
 - **P2B:**
-  - [ ] Instruments and cash accounts are owner-consistent.
-  - [ ] Currency is validated.
-  - [ ] Duplicate instrument identities are allowed.
+  - [x] Instruments and cash accounts are owner-consistent.
+  - [x] Currency is validated.
+  - [x] Duplicate instrument identities are allowed.
 - **P3:**
   - [ ] Holdings and cash are derived, never stored authoritatively.
   - [ ] FIFO is correct.
@@ -773,7 +843,7 @@ The strategy is risk-based testing with incremental development (ADR-QA-01).
 | OpenAPI | Assert paths, schemas, security schemes exist | `tests/http.rs` |
 | Migrations | Fresh-DB apply; constraint behaviour | `tests/database.rs` |
 
-Current suite after P2A: **118 tests** (53 unit + 65 integration). All pass.
+Current suite after P2B: **150 tests** (57 unit + 93 integration). All pass.
 
 Commands:
 
@@ -837,14 +907,15 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
    provisionally.*
 3. **ADR-PORT-03:** confirm that archived portfolios cannot be renamed or
    have their base currency changed. *Implemented provisionally (409).*
-4. **ADR-PORT-04:** does a cash account with no movements count as
-   "financial history" for portfolio deletion? *Needed for P2B.*
+4. **ADR-PORT-04:** confirm that an unused cash account is not history and
+   is deleted together with its portfolio. *Implemented provisionally.*
 5. **ADR-PORT-05:** confirm format-only base-currency validation, rather
    than the ISO 4217 list. *Implemented provisionally.*
-6. **ADR-INST-04:** how are bank deposits represented, including
-   fixed-term deposits?
+6. **ADR-INST-04:** confirm that bank deposits, including fixed-term ones,
+   are plain cash accounts. *Implemented provisionally.* Also confirm
+   deferring the instrument metadata column (ADR-INST-02).
 7. **ADR-NUM-02/04:** decimal column storage, and precision limits per
-   numeric kind and currency minor units.
+   numeric kind and currency minor units. *Needed for P3.*
 8. **ADR-LEDG-02:** the physical ledger schema.
 9. **ADR-LEDG-08:** `sort_order` semantics.
 10. **ADR-NUM-05:** rounding mode and scale for each operation.
@@ -859,8 +930,8 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
 
 ## 23. Current Implementation Status
 
-Verified against the source and the tests. P0–P1.1 are also verified
-against GitHub Actions (commit `8e646a1`). P2A is verified locally, and its
+Verified against the source and the tests. P0–P2A are also verified
+against GitHub Actions (commit `c5e812d`). P2B is verified locally, and its
 commit and CI run are pending.
 
 | Area | Status | Evidence |
@@ -873,10 +944,10 @@ commit and CI run are pending.
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 118 passing | `cargo test --locked` (local) |
+| Tests | ✅ 150 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
-| Instruments, cash accounts (P2B) | ❌ Not started | — |
+| Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
 | Ledger, FIFO (P3) | ❌ Not started | — |
 | Financial transactions (P4) | ❌ Not started | — |
 | Valuation, FX (P5) | ❌ Not started | — |
@@ -886,37 +957,42 @@ commit and CI run are pending.
 
 ## 24. Next Recommended Task
 
-**P2B — Instruments & Cash Accounts.**
+**P3 — Transaction Ledger & FIFO.** This is the first phase with financial
+values, so it carries the most risk.
 
-Prerequisites:
+Prerequisites. These are owner decisions, and P3 code must not start
+without them:
 
-1. Owner confirmation of the P2A provisional choices: open questions 2,
-   3 and 5 in §22. If any is rejected, adjust P2A first.
-2. Owner decisions needed before P2B code:
-   - **ADR-INST-04:** how bank deposits are represented
-   - **ADR-NUM-02/04:** decimal storage and precision limits, needed if
-     any P2B field is a decimal
-   - **ADR-PORT-04:** whether an unused cash account blocks portfolio
-     deletion
-   - **ADR-ARCH-03:** the module layout
-3. Start from a clean `main` with P2A committed and CI green. Then record
-   the P2A commit in §15, §17 and §23.
+1. **ADR-LEDG-02:** the physical ledger schema (`transactions`,
+   `position_movements`, `cash_movements`). Propose it at the start of P3
+   and get it approved before writing migrations.
+2. **ADR-NUM-02/04:** decimal storage (canonical TEXT) and precision limits
+   for quantity, price and money. Verify SeaORM's SQLite mapping of
+   `Decimal` before choosing column types.
+3. **ADR-LEDG-08:** `sort_order` semantics.
+4. **ADR-NUM-05:** rounding for trade amounts and FIFO lot cost.
+5. Confirmation of the P2A/P2B provisional choices (§22: questions 2–6).
+6. Start from a clean `main` with P2B committed and CI green. Then record
+   the P2B commit in §15, §17 and §23.
 
 Implementation notes:
 
-- **Ownership:**
-  - Instruments are user-scoped; their repository functions take
-    `auth::UserId`.
-  - Cash accounts are scoped through the portfolio. Every query joins or
-    filters on a portfolio owned by the user.
-- **Archived portfolios:** cash-account mutations are rejected while the
-  portfolio is `ARCHIVED`, using the same conditional-write pattern as P2A.
-- **Foreign keys:** `cash_accounts.portfolio_id` uses immediate
-  `ON DELETE RESTRICT`.
-- **Portfolio delete:** extend `portfolios::service::delete` with an
-  explicit cash-account check, implementing the ADR-PORT-04 decision.
-- **Reused pieces:** `ResourceId`, `ApiQuery`, `Page`,
-  `CsrfProtectedSession`, `is_foreign_key_violation`, and the
-  `tests/portfolios.rs` cross-user pattern.
+- **Dependencies:** add `rust_decimal`. Money, quantity, price and rate get
+  distinct types (ADR-NUM-03), and decimals are serialized as JSON strings.
+- **FIFO:** a pure module with no SeaORM or Axum types, unit-tested
+  exhaustively.
+- **Foreign keys:** from ledger tables to portfolios, instruments and cash
+  accounts, all immediate `ON DELETE RESTRICT`. The existing delete paths
+  (`portfolio_has_history`, `instrument_in_use`, `cash_account_in_use`)
+  then work automatically. Extend `portfolios::service::delete` explicitly
+  for the new tables.
+- **Ownership:** every referenced instrument and cash account must belong
+  to the caller and to the same portfolio (ADR-OWN-03). Ledger mutations
+  are rejected on `ARCHIVED` portfolios, using the guarded-write pattern
+  from cash accounts.
+- **Atomicity:** each transaction and its movements are written in one
+  database transaction, followed by FIFO replay and validation
+  (ADR-LEDG-03/09).
 
-Out of scope for P2B: prices, FX rates, transactions and movements.
+Out of scope for P3: income, transfers, FX, corporate actions (P4), and
+valuation (P5).

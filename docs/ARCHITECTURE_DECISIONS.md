@@ -178,9 +178,12 @@ Every decision uses the same fields:
   `src/http/<feature>.rs` handlers, and entities and migrations under
   `src/infrastructure/`. Do not reorganize existing modules without
   approval.
-- **P2A note:** portfolios followed this default (`src/portfolios/`,
-  `src/http/portfolios.rs`, `entities/portfolio.rs`). The organization
-  question is still Open.
+- **P2A/P2B note:** portfolios, instruments and cash accounts followed this
+  default (`src/{portfolios,instruments,cash_accounts}/` plus
+  `src/http/<feature>.rs`). Value types used by several features live in
+  `src/validation.rs` (`DisplayName`, `CurrencyCode`, `check`) and
+  `src/pagination.rs` (`Page`, `Paged`). The organization question is still
+  Open.
 
 ### ADR-ARCH-04 — No speculative abstractions
 - **Status:** Accepted · **Source:** Owner · **Phases:** all
@@ -267,6 +270,25 @@ Every decision uses the same fields:
     helper.
   - It is the one place to adapt when PostgreSQL support is added.
 
+### ADR-DB-09 — Read-then-write transactions start with a write
+- **Status:** Accepted · **Source:** Implementation (P2B) · **Phases:** P2B onward
+- **Decision:** A SQLite transaction that reads and then writes must make
+  its **first statement a write**, for example a guarded `UPDATE … WHERE
+  owner` that doubles as the ownership check.
+- **Rationale:** A deferred transaction that starts by reading cannot
+  upgrade to a write lock once another connection has written. SQLite then
+  fails immediately with `SQLITE_BUSY` ("database is locked") rather than
+  waiting for the busy timeout.
+- **Evidence (P2B):** a stress test ran portfolio delete against concurrent
+  cash-account creates, 20 rounds on a file database with 5 connections.
+  - Read-first version: 14 of 20 deletes failed with `500`.
+  - Write-first version (`portfolios::repository::lock_owned`): 0 failures.
+- **Consequences:**
+  - Ledger transactions (P3 onward) must follow this rule.
+  - Read-only transactions, such as list plus count, are unaffected.
+  - PostgreSQL support must add row locks (`FOR UPDATE`/`FOR SHARE`) to
+    the guarded writes as well; see ADR-PORT-04.
+
 ### ADR-DB-08 — `CHECK` constraints for enumerated columns
 - **Status:** Accepted · **Source:** Implementation (P2A) · **Phases:** P2A onward
 - **Decision:** Enumerated text columns get a portable `CHECK (col IN (…))`
@@ -308,6 +330,7 @@ Every decision uses the same fields:
   - `rate_limited`
   - `service_overloaded`
   - `portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history` (P2A)
+  - `instrument_in_use`, `cash_account_in_use` (P2B)
   - `internal_error`
 - **Consequences:** Never change an existing code's meaning. Never leak SQL
   errors, stack traces, secrets or other users' data; internal errors are
@@ -588,16 +611,28 @@ Every decision uses the same fields:
   - The delete use case must check every financial table that exists at
     the time; each new phase extends that check.
   - Deleting a portfolio with history returns `409 portfolio_has_history`.
-- **P2A implementation:** no financial tables exist yet. Delete relies on
-  the FK backstop (ADR-DB-07): a refused delete maps to
-  `portfolio_has_history`, and a test proves this with a stand-in
-  `RESTRICT` table.
-  - The backstop cannot tell history apart from other references.
-  - P2B must add an explicit check, and must decide whether an unused cash
-    account blocks deletion or is removed in the same transaction (open
-    question).
-  - Another user's portfolio still returns `404`, because the delete never
-    matches its row.
+- **Unused cash accounts: Proposed, implemented provisionally in P2B.**
+  A cash account with no movements is not financial history. Deleting a
+  portfolio therefore runs as one transaction:
+  1. confirm the caller owns the portfolio;
+  2. delete its cash accounts;
+  3. delete the portfolio.
+  Awaiting owner confirmation.
+- **History protection:** ledger tables (P3 onward) reference cash accounts
+  and portfolios with immediate `RESTRICT`. Any step that would orphan a
+  record fails, the whole transaction rolls back, and the API returns
+  `409 portfolio_has_history` (ADR-DB-07). Tests prove the rollback with a
+  stand-in movements table.
+- **Other users:** another user's portfolio returns `404`, because the
+  ownership check fails before anything is deleted.
+- **Concurrency:** the transaction starts with a guarded write
+  (`lock_owned`, ADR-DB-09). A concurrent cash-account create therefore
+  waits, then finds the portfolio gone and returns `404`.
+  - On PostgreSQL (not supported yet) this is not enough. There, the
+    guarded `INSERT … SELECT` must lock the portfolio row (`FOR SHARE`), and
+    the delete must take `FOR UPDATE`.
+- **New tables:** a phase that adds a table referencing portfolios must
+  extend `portfolios::service::delete` explicitly.
 
 ### ADR-PORT-05 — Base currency format
 - **Status:** **Proposed, implemented provisionally in P2A** · **Source:** Implementation (P2A) · **Phases:** P2A
@@ -630,6 +665,11 @@ Every decision uses the same fields:
 - **Decision:** Common attributes are relational columns. Attributes
   specific to an asset class go in a typed JSON metadata column, validated
   through Rust types.
+- **P2B: metadata column deferred (Proposed).** No asset-specific attribute
+  has been specified, and an empty column would be a speculative
+  abstraction (ADR-ARCH-04). The column, with its Rust types, is added by a
+  portable `ADD COLUMN` migration once the first attribute is defined.
+  Awaiting owner confirmation.
 
 ### ADR-INST-03 — Fixed quote currency
 - **Status:** Accepted · **Source:** Owner · **Phases:** P2B
@@ -641,9 +681,28 @@ Every decision uses the same fields:
 - **Status:** Accepted · **Source:** Owner · **Phases:** P2B, P5
 - **Decision:** The asset classes are `STOCK`, `ETF`, `MUTUAL_FUND` and
   `CASH`. Thai and international stocks are both `STOCK`.
-- **Open detail:** how bank deposits are represented. *Technical
-  interpretation:* as cash accounts in the `CASH` class. Confirm, in
-  particular for fixed-term deposits.
+- **Implemented (P2B):**
+  - Instruments use `STOCK`, `ETF` or `MUTUAL_FUND`, enforced by a
+    `CHECK` constraint.
+  - `CASH` is not an instrument class. Cash, including bank deposits, is
+    held in cash accounts.
+- **Bank deposits: Proposed, implemented provisionally in P2B.** A bank
+  deposit is a cash account with no subtype. Fixed-term deposit attributes
+  (maturity, rate) are not modelled. Awaiting owner confirmation.
+
+### ADR-INST-06 — Instrument identifiers (P2B)
+- **Status:** Accepted · **Source:** Implementation (P2B) · **Phases:** P2B
+- **Decision:**
+  - `symbol` and `exchange` are optional, trimmed, at most 32 characters,
+    and kept as entered (no case folding). A blank value means none.
+  - `isin` is optional. When present it is validated as ISO 6166, including
+    the Luhn check digit, and stored uppercase.
+  - `name` is 1–200 characters.
+  - `quote_currency` is three letters and cannot be updated (ADR-INST-03).
+  - None of these are unique (ADR-INST-01).
+  - PATCH accepts `null` to clear `symbol`, `isin` or `exchange`.
+- **Consequences:** CSV matching (P6) must not assume symbol case or
+  uniqueness.
 
 ### ADR-INST-05 — No automatic instrument creation on import
 - **Status:** Accepted · **Source:** Owner · **Phases:** P6
@@ -690,6 +749,17 @@ Every decision uses the same fields:
 - **Status:** Accepted · **Source:** Owner · **Phases:** P2B
 - **Decision:** A portfolio may have many cash accounts, including several
   in the same currency. Each cash account has exactly one currency.
+- **Implemented (P2B):**
+  - **Fields:** `cash_accounts` has `id`, `portfolio_id` (FK `RESTRICT`),
+    `name` (1–100 characters), `currency` (three letters), and timestamps.
+  - **Currency:** fixed at creation (Implementation P2B). Changing it would
+    reinterpret recorded movements.
+  - **Writes:** every write is one statement guarded by `EXISTS (portfolio
+    owned by the caller AND ACTIVE)`. Ownership, the archive rule and the
+    write therefore cannot race.
+  - **Archived portfolios:** changes return `409 portfolio_archived` (ADR-PORT-03
+    interpretation: cash accounts are part of the portfolio's financial
+    setup). Reads remain allowed.
 
 ### ADR-LEDG-06 — Trade settlement and optional cash movement
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3
@@ -990,13 +1060,14 @@ Every decision uses the same fields:
 
 | ID | Topic | Blocks |
 | --- | --- | --- |
-| ADR-ARCH-03 | Feature-first vs layer-first module organization (P2A used the current hybrid) | P2B onward |
+| ADR-ARCH-03 | Feature-first vs layer-first module organization (P2A/P2B used the current hybrid) | P3 onward |
 | ADR-API-04 | Confirm page size 50 / 200 (implemented provisionally) | Confirmation only |
 | ADR-PORT-03 | Confirm archived portfolios cannot be updated (implemented provisionally) | Confirmation only |
 | ADR-PORT-05 | Confirm format-only currency validation (implemented provisionally) | Confirmation only |
-| ADR-PORT-04 | Whether an unused cash account blocks portfolio deletion | P2B |
-| ADR-INST-04 | Representation of bank deposits (incl. fixed-term) | P2B |
-| ADR-NUM-02 / NUM-04 | Decimal column types and precision limits per numeric kind | P2B |
+| ADR-PORT-04 | Confirm unused cash accounts are deleted with their portfolio (implemented provisionally) | Confirmation only |
+| ADR-INST-04 | Confirm bank deposits are plain cash accounts (implemented provisionally) | Confirmation only |
+| ADR-INST-02 | Confirm deferring the instrument metadata column (implemented provisionally) | Confirmation only |
+| ADR-NUM-02 / NUM-04 | Decimal column types and precision limits per numeric kind (P2B needed none) | P3 |
 | ADR-LEDG-02 | Physical ledger schema | P3 |
 | ADR-LEDG-08 | `sort_order` semantics | P3 |
 | ADR-NUM-05 | Per-operation rounding rules | P3–P5 |

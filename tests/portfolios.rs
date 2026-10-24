@@ -634,3 +634,20 @@ async fn concurrent_lifecycle_changes_apply_exactly_once() {
         "ARCHIVED"
     );
 }
+
+#[tokio::test]
+async fn update_rejects_null_for_required_fields() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let id = app.new_portfolio(&alice, "Named").await;
+
+    for body in [json!({ "name": null }), json!({ "base_currency": null })] {
+        app.patch_portfolio(&alice, &id, body)
+            .await
+            .assert_problem(StatusCode::BAD_REQUEST, "malformed_request");
+    }
+
+    let current = app.get_portfolio(&alice, &id).await;
+    assert_eq!(current.body["name"], "Named");
+    assert_eq!(current.body["base_currency"], "THB");
+}

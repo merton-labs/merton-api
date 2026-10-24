@@ -1,9 +1,11 @@
 //! HTTP routing and OpenAPI description.
 
 mod auth;
+mod cash_accounts;
 mod error;
 pub mod extract;
 mod health;
+mod instruments;
 mod portfolios;
 
 use axum::http::{HeaderValue, header};
@@ -34,12 +36,24 @@ use crate::app::AppState;
         portfolios::archive,
         portfolios::restore,
         portfolios::delete,
+        instruments::create,
+        instruments::list,
+        instruments::get,
+        instruments::update,
+        instruments::delete,
+        cash_accounts::create,
+        cash_accounts::list,
+        cash_accounts::get,
+        cash_accounts::update,
+        cash_accounts::delete,
     ),
     modifiers(&SessionCookieScheme),
     tags(
         (name = "health", description = "Service health"),
         (name = "auth", description = "Registration, login and sessions. Errors use RFC 9457 Problem Details."),
         (name = "portfolios", description = "The current user's private portfolios. Other users' portfolios are reported as 404."),
+        (name = "instruments", description = "The current user's instruments. Identity fields are optional and need not be unique."),
+        (name = "cash-accounts", description = "Cash accounts inside a portfolio. Changes require an active portfolio."),
     ),
 )]
 pub struct ApiDoc;
@@ -79,13 +93,34 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/{id}/archive", post(portfolios::archive))
         .route("/{id}/restore", post(portfolios::restore))
+        .route(
+            "/{id}/cash-accounts",
+            get(cash_accounts::list).post(cash_accounts::create),
+        )
+        .route(
+            "/{id}/cash-accounts/{account_id}",
+            get(cash_accounts::get)
+                .patch(cash_accounts::update)
+                .delete(cash_accounts::delete),
+        )
+        .layer(no_store());
+
+    let instruments = Router::new()
+        .route("/", get(instruments::list).post(instruments::create))
+        .route(
+            "/{id}",
+            get(instruments::get)
+                .patch(instruments::update)
+                .delete(instruments::delete),
+        )
         .layer(no_store());
 
     let api_v1 = Router::new()
         .route("/health", get(health::health))
         .route("/openapi.json", get(openapi_json))
         .nest("/auth", auth)
-        .nest("/portfolios", portfolios);
+        .nest("/portfolios", portfolios)
+        .nest("/instruments", instruments);
 
     Router::new()
         .nest("/api/v1", api_v1)

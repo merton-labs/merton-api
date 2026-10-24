@@ -7,7 +7,8 @@ use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Path, Query, Req
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, header};
 use axum_extra::extract::cookie::CookieJar;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, Error as _};
+use serde::{Deserialize, Deserializer};
 
 use super::error::ApiError;
 use crate::app::{AppState, Security};
@@ -46,6 +47,28 @@ where
     }
 }
 
+/// For PATCH fields that may be cleared: absent gives `None`, `null` gives
+/// `Some(None)`. Use with `#[serde(default, deserialize_with = "present")]`.
+pub fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// For PATCH fields that cannot be cleared: absent gives `None`, `null` is
+/// rejected (400). Use with `#[serde(default, deserialize_with = "reject_null")]`.
+pub fn reject_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)?
+        .map(Some)
+        .ok_or_else(|| D::Error::custom("null is not allowed for this field"))
+}
+
 /// `Query<T>` whose rejections are Problem Details (400).
 pub struct ApiQuery<T>(pub T);
 
@@ -75,6 +98,21 @@ impl<S: Send + Sync> FromRequestParts<S> for ResourceId {
         Path::<uuid::Uuid>::from_request_parts(parts, state)
             .await
             .map(|Path(id)| Self(id))
+            .map_err(|_| ApiError::NotFound)
+    }
+}
+
+/// Two resource IDs from the path, parent first (for example a portfolio and
+/// one of its cash accounts). Malformed IDs are reported as `404`.
+pub struct ResourceIds(pub uuid::Uuid, pub uuid::Uuid);
+
+impl<S: Send + Sync> FromRequestParts<S> for ResourceIds {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        Path::<(uuid::Uuid, uuid::Uuid)>::from_request_parts(parts, state)
+            .await
+            .map(|Path((parent, child))| Self(parent, child))
             .map_err(|_| ApiError::NotFound)
     }
 }

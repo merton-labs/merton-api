@@ -9,10 +9,13 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::error::{ApiError, ProblemDetails};
-use super::extract::{ApiJson, ApiQuery, CsrfProtectedSession, CurrentSession, ResourceId};
+use super::extract::{
+    ApiJson, ApiQuery, CsrfProtectedSession, CurrentSession, ResourceId, reject_null,
+};
 use crate::app::AppState;
+use crate::pagination::Page;
 use crate::portfolios::service::{self, PortfolioChanges};
-use crate::portfolios::{Page, Portfolio, PortfolioError, PortfolioList, PortfolioStatus};
+use crate::portfolios::{Portfolio, PortfolioError, PortfolioList, PortfolioStatus};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -55,8 +58,10 @@ pub struct CreatePortfolioRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdatePortfolioRequest {
+    #[serde(default, deserialize_with = "reject_null")]
     #[schema(example = "Long-term", min_length = 1, max_length = 100)]
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "reject_null")]
     #[schema(example = "USD", pattern = "^[A-Za-z]{3}$")]
     pub base_currency: Option<String>,
 }

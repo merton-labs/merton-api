@@ -9,6 +9,8 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::auth::{AuthError, FieldError};
+use crate::cash_accounts::CashAccountError;
+use crate::instruments::InstrumentError;
 use crate::portfolios::PortfolioError;
 
 const PROBLEM_JSON: &str = "application/problem+json";
@@ -204,6 +206,44 @@ impl From<PortfolioError> for ApiError {
             },
             PortfolioError::Database(err) => {
                 tracing::error!(error = %err, "portfolio database error");
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<InstrumentError> for ApiError {
+    fn from(err: InstrumentError) -> Self {
+        match err {
+            InstrumentError::Validation(fields) => Self::Validation(fields),
+            InstrumentError::NotFound => Self::NotFound,
+            InstrumentError::InUse => Self::Conflict {
+                code: "instrument_in_use",
+                detail: "The instrument is referenced by other records and cannot be deleted.",
+            },
+            InstrumentError::Database(err) => {
+                tracing::error!(error = %err, "instrument database error");
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<CashAccountError> for ApiError {
+    fn from(err: CashAccountError) -> Self {
+        match err {
+            CashAccountError::Validation(fields) => Self::Validation(fields),
+            CashAccountError::NotFound => Self::NotFound,
+            CashAccountError::PortfolioArchived => Self::Conflict {
+                code: "portfolio_archived",
+                detail: "The portfolio is archived. Restore it before changing it.",
+            },
+            CashAccountError::InUse => Self::Conflict {
+                code: "cash_account_in_use",
+                detail: "The cash account has recorded movements and cannot be deleted.",
+            },
+            CashAccountError::Database(err) => {
+                tracing::error!(error = %err, "cash account database error");
                 Self::Internal
             }
         }

@@ -39,6 +39,22 @@ async fn openapi_documents_endpoints_and_cookie_auth() {
         ("/api/v1/portfolios/{id}", "delete"),
         ("/api/v1/portfolios/{id}/archive", "post"),
         ("/api/v1/portfolios/{id}/restore", "post"),
+        ("/api/v1/instruments", "get"),
+        ("/api/v1/instruments", "post"),
+        ("/api/v1/instruments/{id}", "get"),
+        ("/api/v1/instruments/{id}", "patch"),
+        ("/api/v1/instruments/{id}", "delete"),
+        ("/api/v1/portfolios/{id}/cash-accounts", "get"),
+        ("/api/v1/portfolios/{id}/cash-accounts", "post"),
+        ("/api/v1/portfolios/{id}/cash-accounts/{account_id}", "get"),
+        (
+            "/api/v1/portfolios/{id}/cash-accounts/{account_id}",
+            "patch",
+        ),
+        (
+            "/api/v1/portfolios/{id}/cash-accounts/{account_id}",
+            "delete",
+        ),
     ] {
         let operation = &doc["paths"][path][method];
         assert!(operation.is_object(), "{method} {path}");

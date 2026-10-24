@@ -2,10 +2,10 @@
 
 Backend for **Merton**, an open-source, self-hosted, multi-user investment portfolio tracker.
 
-> **Status: portfolios.** The server foundation, local email/password
-> accounts with server-managed cookie sessions, and private portfolio
-> management are implemented. No financial features (instruments, cash,
-> transactions, valuation) have been built yet. See
+> **Status: reference data.** The server foundation, local email/password
+> accounts with server-managed cookie sessions, private portfolios, and
+> their reference data (instruments and cash accounts) are implemented. The
+> transaction ledger, valuation and CSV import are not built yet. See
 > [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the roadmap and
 > [CLAUDE.md](CLAUDE.md) for contributor rules.
 
@@ -63,13 +63,29 @@ automatically before the server starts accepting requests.
 | PATCH  | `/api/v1/portfolios/{id}` | cookie + CSRF | Rename or change base currency (active only)        |
 | POST   | `/api/v1/portfolios/{id}/archive` | cookie + CSRF | Archive (read-only until restored)        |
 | POST   | `/api/v1/portfolios/{id}/restore` | cookie + CSRF | Restore to active                         |
-| DELETE | `/api/v1/portfolios/{id}` | cookie + CSRF | Delete a portfolio without financial history (`204`) |
+| DELETE | `/api/v1/portfolios/{id}` | cookie + CSRF | Delete a portfolio without financial history, with its unused cash accounts (`204`) |
+| GET    | `/api/v1/instruments`   | cookie          | List own instruments (`limit`, `offset`, `asset_class`) |
+| POST   | `/api/v1/instruments`   | cookie + CSRF   | Create `{asset_class, name, symbol?, isin?, exchange?, quote_currency}` |
+| GET    | `/api/v1/instruments/{id}` | cookie       | Get an own instrument                               |
+| PATCH  | `/api/v1/instruments/{id}` | cookie + CSRF | Update descriptive fields; `null` clears symbol/isin/exchange; quote currency is fixed |
+| DELETE | `/api/v1/instruments/{id}` | cookie + CSRF | Delete an unused instrument (`204`)                |
+| GET    | `/api/v1/portfolios/{id}/cash-accounts` | cookie | List a portfolio's cash accounts           |
+| POST   | `/api/v1/portfolios/{id}/cash-accounts` | cookie + CSRF | Create `{name, currency}` (active portfolios only) |
+| GET    | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie | Get a cash account          |
+| PATCH  | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie + CSRF | Rename (currency is fixed) |
+| DELETE | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie + CSRF | Delete an account with no movements (`204`) |
 
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 (`application/problem+json`) with a stable `code` field, for example
 `invalid_credentials`, `email_taken`, `validation_failed`, `csrf_invalid`,
 `untrusted_origin`, `rate_limited`, `service_overloaded`, `not_found`,
-`portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history`.
+`portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history`,
+`instrument_in_use`, `cash_account_in_use`.
+
+Instruments use the asset classes `STOCK`, `ETF` and `MUTUAL_FUND`. Their
+symbol, ISIN and exchange are optional and need not be unique, and ISINs
+are checked against their check digit. Cash, including bank deposits, lives
+in cash accounts: a portfolio can have several, even in the same currency.
 
 Portfolios belong to exactly one user. Another user's portfolio is reported
 as `404`, exactly like one that does not exist.
@@ -204,6 +220,10 @@ src/
 │   ├── repository.rs    #   User and session queries
 │   └── service.rs       #   Register, login, authenticate, logout
 ├── portfolios/          # Portfolio rules, owner-scoped queries, use cases
+├── instruments/         # Instruments (asset class, identifiers, quote currency)
+├── cash_accounts/       # Cash accounts, owned through their portfolio
+├── validation.rs        # Shared value types (names, currency codes)
+├── pagination.rs        # Shared limit/offset paging
 ├── http/                # Router, handlers, extractors, errors, OpenAPI
 └── infrastructure/
     ├── database.rs      # Connection pool setup

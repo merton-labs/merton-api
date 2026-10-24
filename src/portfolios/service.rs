@@ -9,12 +9,13 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::repository;
-use super::{
-    CurrencyCode, Page, Portfolio, PortfolioError, PortfolioList, PortfolioName, PortfolioStatus,
-};
+use super::{MAX_NAME_CHARS, Portfolio, PortfolioError, PortfolioList, PortfolioStatus};
 use crate::auth::{FieldError, UserId};
+use crate::cash_accounts::repository as cash_accounts;
 use crate::infrastructure::database::is_foreign_key_violation;
 use crate::infrastructure::entities::portfolio;
+use crate::pagination::Page;
+use crate::validation::{CurrencyCode, DisplayName, check};
 
 pub struct PortfolioChanges<'a> {
     pub name: Option<&'a str>,
@@ -28,7 +29,11 @@ pub async fn create(
     base_currency: &str,
 ) -> Result<Portfolio, PortfolioError> {
     let mut errors = Vec::new();
-    let name = check(&mut errors, "name", PortfolioName::parse(name));
+    let name = check(
+        &mut errors,
+        "name",
+        DisplayName::parse(name, MAX_NAME_CHARS),
+    );
     let currency = check(
         &mut errors,
         "base_currency",
@@ -94,7 +99,7 @@ pub async fn update(
     let mut errors = Vec::new();
     let name = changes
         .name
-        .and_then(|n| check(&mut errors, "name", PortfolioName::parse(n)));
+        .and_then(|n| check(&mut errors, "name", DisplayName::parse(n, MAX_NAME_CHARS)));
     let currency = changes
         .base_currency
         .and_then(|c| check(&mut errors, "base_currency", CurrencyCode::parse(c)));
@@ -112,7 +117,7 @@ pub async fn update(
         db,
         owner,
         id,
-        name.as_ref().map(PortfolioName::as_str),
+        name.as_ref().map(DisplayName::as_str),
         currency.as_ref().map(CurrencyCode::as_str),
         OffsetDateTime::now_utc(),
     )
@@ -156,26 +161,38 @@ pub async fn restore(
 }
 
 /// Permanently deletes a portfolio that has no financial history
-/// (ADR-PORT-04).
+/// (ADR-PORT-04), in one transaction:
 ///
-/// Financial tables must reference portfolios with immediate (not
-/// deferrable) `ON DELETE RESTRICT`. The database then refuses to delete a
-/// portfolio that has history, and this returns
-/// [`PortfolioError::HasFinancialHistory`]; records are never cascaded away.
+/// 1. confirm the caller owns the portfolio, with a write that also locks
+///    out concurrent cash-account changes until the transaction ends;
+/// 2. remove its cash accounts, which are not history by themselves;
+/// 3. remove the portfolio.
 ///
-/// That foreign-key check is a backstop: it cannot tell financial history
-/// from other references. When a phase adds a table that references
-/// portfolios, it must also add an explicit check here, and decide whether
-/// rows that are not history (such as an unused cash account) are removed
-/// in the same transaction or block deletion.
+/// History is protected by the database: ledger tables reference cash
+/// accounts and portfolios with immediate `ON DELETE RESTRICT`, so any step
+/// that would orphan a financial record fails, the transaction rolls back,
+/// and this returns [`PortfolioError::HasFinancialHistory`]. Nothing is ever
+/// cascaded. A phase that adds a table referencing portfolios must extend
+/// this function to handle it explicitly.
 pub async fn delete(
     db: &DatabaseConnection,
     owner: UserId,
     id: Uuid,
 ) -> Result<(), PortfolioError> {
-    match repository::delete(db, owner, id).await {
-        Ok(0) => Err(PortfolioError::NotFound),
-        Ok(_) => Ok(()),
+    let result = async {
+        let txn = db.begin().await?;
+        if repository::lock_owned(&txn, owner, id, OffsetDateTime::now_utc()).await? == 0 {
+            return Ok(false);
+        }
+        cash_accounts::delete_all_in_portfolio(&txn, id).await?;
+        repository::delete(&txn, owner, id).await?;
+        txn.commit().await?;
+        Ok(true)
+    }
+    .await;
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(PortfolioError::NotFound),
         Err(err) if is_foreign_key_violation(&err) => Err(PortfolioError::HasFinancialHistory),
         Err(err) => Err(err.into()),
     }
@@ -210,21 +227,6 @@ async fn missing_or(
         Ok(None) => PortfolioError::NotFound,
         Err(err) => err.into(),
     }
-}
-
-fn check<T>(
-    errors: &mut Vec<FieldError>,
-    field: &'static str,
-    result: Result<T, &'static str>,
-) -> Option<T> {
-    result
-        .map_err(|message| {
-            errors.push(FieldError {
-                field,
-                message: message.to_owned(),
-            })
-        })
-        .ok()
 }
 
 fn to_domain(model: portfolio::Model) -> Result<Portfolio, PortfolioError> {

@@ -69,6 +69,9 @@ that was never approved.
   authoritatively.
 - Related ledger writes are atomic. Never cascade-delete financial
   records.
+- A SQLite transaction that reads and then writes must start with a write
+  (ADR-DB-09); otherwise it fails with "database is locked" under
+  concurrency.
 - Do not invent financial rules (rounding, allocation, fee placement).
   If a rule is Open in the decisions doc, stop and ask.
 
@@ -133,7 +136,11 @@ ownership, ledger, FIFO, decimals, valuation, import) need deeper review:
   `docs/ARCHITECTURE_DECISIONS.md` and check whether the plan must change
   too.
 - Never mark a Proposed or Open decision as Accepted. Only the project
-  owner accepts decisions.
+  owner accepts product and architecture decisions.
+  - Implementation details that shipped in reviewed code may be recorded
+    as `Accepted · Source: Implementation (Pn)`.
+  - Anything that answers an Open question stays `Proposed` until the
+    owner confirms it.
 - Keep README's configuration table in sync with `src/config.rs`.
 - Do not tie these docs to a specific AI model version.
 
