@@ -9,27 +9,29 @@ repository = "https://github.com/merton-labs/merton-api"
 publish = false
 
 [dependencies]
+argon2 = "0.6.0"
 axum = "0.8.9"
+axum-extra = { version = "0.12.6", default-features = false, features = ["cookie"] }
+base64ct = "1.7"
 dotenvy = "0.15.7"
-sea-orm = { version = "2.0.4", default-features = false, features = [
-    "macros",
-    "runtime-tokio",
-    "sqlx-sqlite",
-] }
-sea-orm-migration = { version = "2.0.4", default-features = false, features = [
-    "runtime-tokio",
-    "sqlx-sqlite",
-] }
+getrandom = "0.4.3"
+hmac = "0.13.0"
+sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio", "sqlx-sqlite", "with-time", "with-uuid"] }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["runtime-tokio", "sqlx-sqlite", "with-time", "with-uuid"] }
 serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.1"
 thiserror = "2.0.21"
+time = "0.3.55"
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal"] }
-tower-http = { version = "0.7.1", features = ["trace"] }
+tower-http = { version = "0.7.1", features = ["set-header", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-utoipa = "6.0.0"
+utoipa = { version = "6.0.0", features = ["uuid"] }
+uuid = { version = "1.29.0", features = ["v7", "serde"] }
 
 [dev-dependencies]
 serde_json = "1.0.154"
+time = { version = "0.3.55", features = ["macros"] }
 tower = { version = "0.5.3", features = ["util"] }
 
 [lints.rust]
@@ -38,3 +40,10 @@ unsafe_code = "forbid"
 [lints.clippy]
 expect_used = "warn"
 unwrap_used = "warn"
+
+# Argon2 is unusably slow unoptimized; keep debug builds and tests fast.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

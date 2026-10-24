@@ -1,18 +1,23 @@
 //! Application wiring: database, migrations, HTTP server and shutdown.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use sea_orm::{DatabaseConnection, DbErr};
 use sea_orm_migration::MigratorTrait;
 use tokio::net::TcpListener;
 
-use crate::config::Config;
+use crate::auth::csrf::{CsrfKey, InvalidKey};
+use crate::auth::rate_limit::LoginRateLimiter;
+use crate::config::{Config, SecurityConfig};
 use crate::http;
 use crate::infrastructure::database;
 use crate::infrastructure::migrations::Migrator;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
+    #[error("invalid security configuration: {0}")]
+    Security(#[from] InvalidKey),
     #[error("failed to connect to database: {0}")]
     DatabaseConnect(#[source] DbErr),
     #[error("failed to run database migrations: {0}")]
@@ -31,11 +36,46 @@ pub enum ServerError {
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
+    pub security: Arc<Security>,
+}
+
+/// Process-wide security state for request handling.
+pub struct Security {
+    pub csrf: CsrfKey,
+    pub login_limiter: LoginRateLimiter,
+    pub trusted_origins: Vec<String>,
+    pub trusted_proxies: Vec<IpAddr>,
+    pub cookie_secure: bool,
+}
+
+impl AppState {
+    pub fn new(db: DatabaseConnection, config: &SecurityConfig) -> Result<Self, InvalidKey> {
+        Ok(Self {
+            db,
+            security: Arc::new(Security {
+                csrf: CsrfKey::new(&config.secret_key)?,
+                login_limiter: LoginRateLimiter::default(),
+                trusted_origins: config.trusted_origins.clone(),
+                trusted_proxies: config.trusted_proxies.clone(),
+                cookie_secure: config.cookie_secure,
+            }),
+        })
+    }
 }
 
 /// Connects to the database, applies migrations and serves HTTP until a
 /// shutdown signal is received.
 pub async fn run(config: Config) -> Result<(), ServerError> {
+    tracing::info!(
+        trusted_origins = ?config.security.trusted_origins,
+        trusted_proxies = ?config.security.trusted_proxies,
+        cookie_secure = config.security.cookie_secure,
+        "security configuration loaded"
+    );
+    if !config.security.cookie_secure {
+        tracing::warn!("SESSION_COOKIE_SECURE=false: session cookies are sent over plain HTTP");
+    }
+
     let db = database::connect(&config.database)
         .await
         .map_err(ServerError::DatabaseConnect)?;
@@ -56,7 +96,8 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
         .map_err(|source| ServerError::Bind { addr, source })?;
     tracing::info!(%addr, "listening");
 
-    let router = http::router(AppState { db: db.clone() });
+    let state = AppState::new(db.clone(), &config.security)?;
+    let router = http::router(state).into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await

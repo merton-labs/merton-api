@@ -10,21 +10,29 @@ const DEFAULT_PORT: u16 = 8080;
 const DEFAULT_DATABASE_URL: &str = "sqlite://data/merton.db";
 const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 5;
 const DEFAULT_DATABASE_BUSY_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_TRUSTED_ORIGINS: &str = "http://localhost:8080,http://127.0.0.1:8080";
+const MIN_SECRET_KEY_BYTES: usize = 32;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    #[error("environment variable {name} is required")]
+    Missing { name: &'static str },
     #[error("environment variable {name} has invalid value {value:?}: {reason}")]
     InvalidValue {
         name: &'static str,
         value: String,
         reason: String,
     },
+    // Never echoes the value.
+    #[error("environment variable {name} is invalid: {reason}")]
+    InvalidSecret { name: &'static str, reason: String },
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
+    pub security: SecurityConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +61,29 @@ impl fmt::Debug for DatabaseConfig {
             .field("url", &"<redacted>")
             .field("max_connections", &self.max_connections)
             .field("busy_timeout", &self.busy_timeout)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct SecurityConfig {
+    /// Server secret used to derive CSRF tokens. Must persist across restarts.
+    pub secret_key: Vec<u8>,
+    /// Exact origins (`scheme://host[:port]`) the browser may send mutating requests from.
+    pub trusted_origins: Vec<String>,
+    /// Reverse proxies whose `X-Forwarded-For` header is believed.
+    pub trusted_proxies: Vec<IpAddr>,
+    /// Whether session cookies carry `Secure` (and the `__Host-` prefix).
+    pub cookie_secure: bool,
+}
+
+impl fmt::Debug for SecurityConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecurityConfig")
+            .field("secret_key", &"<redacted>")
+            .field("trusted_origins", &self.trusted_origins)
+            .field("trusted_proxies", &self.trusted_proxies)
+            .field("cookie_secure", &self.cookie_secure)
             .finish()
     }
 }
@@ -92,8 +123,98 @@ impl Config {
                     DEFAULT_DATABASE_BUSY_TIMEOUT_MS,
                 )?),
             },
+            security: security_from(&lookup)?,
         })
     }
+}
+
+fn security_from(lookup: &impl Fn(&str) -> Option<String>) -> Result<SecurityConfig, ConfigError> {
+    let secret_key = lookup("APP_SECRET_KEY")
+        .map(|value| value.trim().as_bytes().to_vec())
+        .ok_or(ConfigError::Missing {
+            name: "APP_SECRET_KEY",
+        })?;
+    if secret_key.len() < MIN_SECRET_KEY_BYTES {
+        return Err(ConfigError::InvalidSecret {
+            name: "APP_SECRET_KEY",
+            reason: format!("must be at least {MIN_SECRET_KEY_BYTES} bytes"),
+        });
+    }
+
+    let origins = lookup("APP_TRUSTED_ORIGINS");
+    let origins = origins.as_deref().unwrap_or(DEFAULT_TRUSTED_ORIGINS);
+    let trusted_origins = parse_list(origins, "APP_TRUSTED_ORIGINS", parse_origin)?;
+
+    let proxies = lookup("TRUSTED_PROXIES").unwrap_or_default();
+    let trusted_proxies = parse_list(&proxies, "TRUSTED_PROXIES", |item| {
+        item.parse::<IpAddr>().map_err(|err| err.to_string())
+    })?;
+
+    let cookie_secure = parse_or(&lookup, "SESSION_COOKIE_SECURE", true)?;
+    if !cookie_secure && !trusted_origins.iter().all(|o| is_loopback_http_origin(o)) {
+        return Err(ConfigError::InvalidValue {
+            name: "SESSION_COOKIE_SECURE",
+            value: "false".to_owned(),
+            reason: "insecure cookies are only allowed when every trusted origin is \
+                     http://localhost, http://127.0.0.1 or http://[::1]"
+                .to_owned(),
+        });
+    }
+
+    Ok(SecurityConfig {
+        secret_key,
+        trusted_origins,
+        trusted_proxies,
+        cookie_secure,
+    })
+}
+
+fn parse_list<T>(
+    raw: &str,
+    name: &'static str,
+    parse_item: impl Fn(&str) -> Result<T, String>,
+) -> Result<Vec<T>, ConfigError> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| {
+            parse_item(item).map_err(|reason| ConfigError::InvalidValue {
+                name,
+                value: item.to_owned(),
+                reason,
+            })
+        })
+        .collect()
+}
+
+/// Parses an origin into the form browsers send in the `Origin` header:
+/// lowercase, no trailing slash, no default port.
+fn parse_origin(raw: &str) -> Result<String, String> {
+    let lower = raw.trim_end_matches('/').to_ascii_lowercase();
+    let (scheme, authority) = lower
+        .split_once("://")
+        .ok_or("must look like scheme://host[:port]")?;
+    let default_port = match scheme {
+        "http" => ":80",
+        "https" => ":443",
+        _ => return Err("scheme must be http or https".to_owned()),
+    };
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@', '*']) {
+        return Err("must be an origin without path, query or wildcard".to_owned());
+    }
+    let authority = authority.strip_suffix(default_port).unwrap_or(authority);
+    Ok(format!("{scheme}://{authority}"))
+}
+
+fn is_loopback_http_origin(origin: &str) -> bool {
+    let Some(authority) = origin.strip_prefix("http://") else {
+        return false;
+    };
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && port.parse::<u16>().is_ok() => host,
+        _ => authority,
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 fn parse_or<T>(
@@ -123,11 +244,15 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    const SECRET: &str = "test-secret-key-that-is-long-enough-123";
+
     fn config_from(vars: &[(&str, &str)]) -> Result<Config, ConfigError> {
-        let vars: HashMap<String, String> = vars
+        let mut vars: HashMap<String, String> = vars
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
+        vars.entry("APP_SECRET_KEY".to_owned())
+            .or_insert_with(|| SECRET.to_owned());
         Config::from_lookup(|name| vars.get(name).cloned())
     }
 
@@ -142,6 +267,12 @@ mod tests {
         assert_eq!(config.database.url, DEFAULT_DATABASE_URL);
         assert_eq!(config.database.max_connections, 5);
         assert_eq!(config.database.busy_timeout, Duration::from_secs(5));
+        assert_eq!(
+            config.security.trusted_origins,
+            ["http://localhost:8080", "http://127.0.0.1:8080"]
+        );
+        assert!(config.security.trusted_proxies.is_empty());
+        assert!(config.security.cookie_secure);
     }
 
     #[test]
@@ -152,6 +283,8 @@ mod tests {
             ("DATABASE_URL", "sqlite::memory:"),
             ("DATABASE_MAX_CONNECTIONS", "2"),
             ("DATABASE_BUSY_TIMEOUT_MS", "250"),
+            ("APP_TRUSTED_ORIGINS", "https://Merton.Example.com:443/"),
+            ("TRUSTED_PROXIES", "10.0.0.2, ::1"),
         ])
         .unwrap();
 
@@ -159,6 +292,17 @@ mod tests {
         assert_eq!(config.database.url, "sqlite::memory:");
         assert_eq!(config.database.max_connections, 2);
         assert_eq!(config.database.busy_timeout, Duration::from_millis(250));
+        assert_eq!(
+            config.security.trusted_origins,
+            ["https://merton.example.com"]
+        );
+        assert_eq!(
+            config.security.trusted_proxies,
+            [
+                "10.0.0.2".parse::<IpAddr>().unwrap(),
+                "::1".parse().unwrap()
+            ]
+        );
     }
 
     #[test]
@@ -188,9 +332,80 @@ mod tests {
     }
 
     #[test]
-    fn debug_output_redacts_database_url() {
-        let config = config_from(&[("DATABASE_URL", "postgres://user:secret@db/merton")]).unwrap();
+    fn requires_a_long_enough_secret_without_echoing_it() {
+        let vars = HashMap::<String, String>::new();
+        let missing = Config::from_lookup(|name| vars.get(name).cloned()).unwrap_err();
+        assert!(matches!(
+            missing,
+            ConfigError::Missing {
+                name: "APP_SECRET_KEY"
+            }
+        ));
 
-        assert!(!format!("{config:?}").contains("secret"));
+        let short = config_from(&[("APP_SECRET_KEY", "hunter2-short")]).unwrap_err();
+        assert!(matches!(short, ConfigError::InvalidSecret { .. }));
+        assert!(!short.to_string().contains("hunter2"));
+    }
+
+    #[test]
+    fn rejects_invalid_origins() {
+        for origin in [
+            "localhost:8080",
+            "ftp://example.com",
+            "https://example.com/app",
+            "*",
+            "https://*",
+        ] {
+            let err = config_from(&[("APP_TRUSTED_ORIGINS", origin)]).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::InvalidValue {
+                        name: "APP_TRUSTED_ORIGINS",
+                        ..
+                    }
+                ),
+                "{origin}"
+            );
+        }
+    }
+
+    #[test]
+    fn insecure_cookies_only_for_loopback_http() {
+        let local = config_from(&[
+            ("SESSION_COOKIE_SECURE", "false"),
+            (
+                "APP_TRUSTED_ORIGINS",
+                "http://localhost:3000,http://[::1]:8080",
+            ),
+        ]);
+        assert!(local.is_ok_and(|c| !c.security.cookie_secure));
+
+        for origins in ["https://merton.example.com", "http://192.168.1.10:8080"] {
+            let err = config_from(&[
+                ("SESSION_COOKIE_SECURE", "false"),
+                ("APP_TRUSTED_ORIGINS", origins),
+            ])
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::InvalidValue {
+                        name: "SESSION_COOKIE_SECURE",
+                        ..
+                    }
+                ),
+                "{origins}"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_output_redacts_secrets() {
+        let config = config_from(&[("DATABASE_URL", "postgres://user:secret@db/merton")]).unwrap();
+        let debug = format!("{config:?}");
+
+        assert!(!debug.contains("secret@"));
+        assert!(!debug.contains(SECRET));
     }
 }

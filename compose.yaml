@@ -7,6 +7,10 @@ services:
       APP_HOST: 0.0.0.0
       APP_PORT: 8080
       DATABASE_URL: sqlite:///app/data/merton.db
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY (e.g. openssl rand -base64 48)}
+      APP_TRUSTED_ORIGINS: ${APP_TRUSTED_ORIGINS:-http://localhost:8080}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       RUST_LOG: ${RUST_LOG:-merton_api=info,tower_http=info,sqlx=warn}
     ports:
       # Published on localhost only; change to "8080:8080" to expose on the network.
