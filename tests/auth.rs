@@ -3,7 +3,7 @@
 mod common;
 
 use axum::http::{StatusCode, header};
-use common::{ORIGIN, PASSWORD, Req, SESSION_COOKIE, TestApp};
+use common::{ORIGIN, PASSWORD, Req, SESSION_COOKIE, TestApp, TestResponse, security_config};
 use merton_api::auth::session::hash_presented_token;
 use merton_api::infrastructure::entities::{user, user_session};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, SqlErr};
@@ -695,4 +695,203 @@ async fn sessions_require_an_existing_user() {
         err.sql_err(),
         Some(SqlErr::ForeignKeyConstraintViolation(_))
     ));
+}
+
+// --- Concurrency and overload ---------------------------------------------
+
+/// Sends all requests at once and returns the response statuses.
+async fn concurrently(
+    app: &TestApp,
+    requests: Vec<(String, serde_json::Value)>,
+) -> Vec<StatusCode> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for (peer, body) in requests {
+        let app = app.clone();
+        tasks.spawn(async move {
+            app.send(Req::post("/api/v1/auth/login").peer(&peer).json(body))
+                .await
+                .status
+        });
+    }
+    tasks.join_all().await
+}
+
+fn count(statuses: &[StatusCode], status: StatusCode) -> usize {
+    statuses.iter().filter(|s| **s == status).count()
+}
+
+fn roomy_hashing() -> merton_api::config::SecurityConfig {
+    merton_api::config::SecurityConfig {
+        max_concurrent_hashes: 64,
+        ..security_config()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_guesses_cannot_exceed_account_failure_limit() {
+    let app = TestApp::with_config(&roomy_hashing()).await;
+    app.register("target@example.com", PASSWORD).await;
+
+    // Twelve wrong guesses in flight at once, each from a different client.
+    let requests = (0..12)
+        .map(|i| {
+            (
+                format!("192.0.2.{}:5000", 10 + i),
+                json!({ "email": "target@example.com", "password": "wrong password guess" }),
+            )
+        })
+        .collect();
+    let statuses = concurrently(&app, requests).await;
+
+    assert_eq!(
+        count(&statuses, StatusCode::UNAUTHORIZED),
+        5,
+        "{statuses:?}"
+    );
+    assert_eq!(
+        count(&statuses, StatusCode::TOO_MANY_REQUESTS),
+        7,
+        "{statuses:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_attempts_from_one_client_cannot_exceed_ip_limit() {
+    let app = TestApp::with_config(&roomy_hashing()).await;
+
+    let requests = (0..30)
+        .map(|i| {
+            (
+                "198.51.100.20:6000".to_owned(),
+                json!({ "email": format!("spray{i}@example.com"), "password": PASSWORD }),
+            )
+        })
+        .collect();
+    let statuses = concurrently(&app, requests).await;
+
+    assert_eq!(
+        count(&statuses, StatusCode::UNAUTHORIZED),
+        20,
+        "{statuses:?}"
+    );
+    assert_eq!(
+        count(&statuses, StatusCode::TOO_MANY_REQUESTS),
+        10,
+        "{statuses:?}"
+    );
+}
+
+fn assert_overloaded(response: &TestResponse) {
+    response.assert_problem(StatusCode::SERVICE_UNAVAILABLE, "service_overloaded");
+    assert_eq!(response.headers[header::RETRY_AFTER], "1");
+    assert!(response.session_set_cookie().is_none());
+}
+
+#[tokio::test]
+async fn saturated_hashing_rejects_all_password_work_uniformly() {
+    let app = TestApp::new().await;
+    app.register("busy@example.com", PASSWORD).await;
+    let hashes = &app.state.security.hash_limiter;
+    let held: Vec<_> = (0..4).map(|_| hashes.try_reserve().unwrap()).collect();
+
+    let known = app.login("busy@example.com", PASSWORD).await;
+    let unknown = app.login("nobody@example.com", PASSWORD).await;
+    let malformed_email = app.login("not-an-email", PASSWORD).await;
+    let register = app.register("new@example.com", PASSWORD).await;
+
+    for response in [&known, &unknown, &malformed_email, &register] {
+        assert_overloaded(response);
+    }
+    assert_eq!(
+        known.body, unknown.body,
+        "overload must not reveal accounts"
+    );
+
+    // Cheap validation still runs first; nothing is queued while saturated.
+    app.register("bad", "short")
+        .await
+        .assert_problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(hashes.available(), 0);
+
+    drop(held);
+    assert_eq!(hashes.available(), 4);
+    assert_eq!(
+        app.login("busy@example.com", PASSWORD).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.register("new@example.com", PASSWORD).await.status,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        hashes.available(),
+        4,
+        "permits returned after each operation"
+    );
+}
+
+#[tokio::test]
+async fn overload_does_not_consume_account_failure_budget() {
+    let app = TestApp::new().await;
+    app.register("patient@example.com", PASSWORD).await;
+    let hashes = &app.state.security.hash_limiter;
+
+    let held: Vec<_> = (0..4).map(|_| hashes.try_reserve().unwrap()).collect();
+    for _ in 0..8 {
+        assert_overloaded(
+            &app.login("patient@example.com", "wrong password guess")
+                .await,
+        );
+    }
+    drop(held);
+
+    assert_eq!(
+        app.login("patient@example.com", PASSWORD).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn permits_are_returned_after_failed_logins() {
+    let app = TestApp::new().await;
+    app.register("again@example.com", PASSWORD).await;
+
+    for _ in 0..3 {
+        let response = app.login("again@example.com", "wrong password guess").await;
+        response.assert_problem(StatusCode::UNAUTHORIZED, "invalid_credentials");
+    }
+
+    assert_eq!(app.state.security.hash_limiter.available(), 4);
+}
+
+#[tokio::test]
+async fn overlong_login_password_fails_without_hashing() {
+    let app = TestApp::new().await;
+    app.register("long@example.com", PASSWORD).await;
+    let hashes = &app.state.security.hash_limiter;
+    let held: Vec<_> = (0..4).map(|_| hashes.try_reserve().unwrap()).collect();
+
+    // Even with no hashing capacity left, an impossible password is a plain 401.
+    let response = app.login("long@example.com", &"x".repeat(129)).await;
+
+    response.assert_problem(StatusCode::UNAUTHORIZED, "invalid_credentials");
+    drop(held);
+}
+
+#[tokio::test]
+async fn registration_attempts_share_the_client_budget() {
+    let app = TestApp::new().await;
+
+    // Invalid registrations are cheap but still count, so they cannot be
+    // used to probe without limit.
+    for _ in 0..20 {
+        let response = app.register("bad", "short").await;
+        assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    let limited = app.register("valid@example.com", PASSWORD).await;
+    limited.assert_problem(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+    let login = app.login("valid@example.com", PASSWORD).await;
+    login.assert_problem(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+    assert_eq!(app.state.security.hash_limiter.available(), 4);
 }

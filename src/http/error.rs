@@ -11,6 +11,14 @@ use utoipa::ToSchema;
 use crate::auth::{AuthError, FieldError};
 
 const PROBLEM_JSON: &str = "application/problem+json";
+/// Argon2 operations finish in well under a second, so capacity frees quickly.
+const OVERLOAD_RETRY_AFTER_SECS: u64 = 1;
+
+/// Rounds up so a client that waits exactly `Retry-After` is not rejected again.
+fn whole_seconds_ceil(duration: Duration) -> u64 {
+    let seconds = duration.as_secs() + u64::from(duration.subsec_nanos() > 0);
+    seconds.max(1)
+}
 
 /// An RFC 9457 problem document.
 #[derive(Debug, Serialize, ToSchema)]
@@ -55,6 +63,7 @@ pub enum ApiError {
     EmailTaken,
     Validation(Vec<FieldError>),
     RateLimited(Duration),
+    Overloaded,
     Internal,
 }
 
@@ -100,6 +109,11 @@ impl ApiError {
                 "rate_limited",
                 "Too many authentication attempts. Try again later.".to_owned(),
             ),
+            Self::Overloaded => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "service_overloaded",
+                "The server is busy processing other sign-ins. Try again shortly.".to_owned(),
+            ),
             Self::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -136,8 +150,12 @@ impl IntoResponse for ApiError {
         let mut response = (status, Json(body)).into_response();
         let headers = response.headers_mut();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(PROBLEM_JSON));
-        if let Self::RateLimited(retry_after) = self {
-            let seconds = retry_after.as_secs().max(1);
+        let retry_after = match self {
+            Self::RateLimited(remaining) => Some(whole_seconds_ceil(remaining)),
+            Self::Overloaded => Some(OVERLOAD_RETRY_AFTER_SECS),
+            _ => None,
+        };
+        if let Some(seconds) = retry_after {
             headers.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
         }
         response
@@ -152,6 +170,7 @@ impl From<AuthError> for ApiError {
             AuthError::InvalidCredentials => Self::InvalidCredentials,
             AuthError::RateLimited(retry_after) => Self::RateLimited(retry_after.0),
             AuthError::Unauthenticated => Self::Unauthenticated,
+            AuthError::Overloaded => Self::Overloaded,
             AuthError::Internal(err) => {
                 tracing::error!(error = %err, "internal error");
                 Self::Internal
@@ -162,4 +181,17 @@ impl From<AuthError> for ApiError {
 
 pub async fn not_found() -> ApiError {
     ApiError::NotFound
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_rounds_up_to_whole_seconds() {
+        assert_eq!(whole_seconds_ceil(Duration::from_millis(1)), 1);
+        assert_eq!(whole_seconds_ceil(Duration::from_secs(1)), 1);
+        assert_eq!(whole_seconds_ceil(Duration::from_millis(899_400)), 900);
+        assert_eq!(whole_seconds_ceil(Duration::ZERO), 1);
+    }
 }

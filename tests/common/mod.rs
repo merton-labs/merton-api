@@ -41,11 +41,16 @@ pub fn security_config() -> SecurityConfig {
         trusted_origins: vec![ORIGIN.to_owned()],
         trusted_proxies: Vec::new(),
         cookie_secure: true,
+        max_concurrent_hashes: 4,
     }
 }
 
 pub async fn test_state() -> Result<AppState, DbErr> {
-    Ok(AppState::new(test_db().await?, &security_config()).expect("valid test key"))
+    test_state_with(&security_config()).await
+}
+
+pub async fn test_state_with(config: &SecurityConfig) -> Result<AppState, DbErr> {
+    Ok(AppState::new(test_db().await?, config).expect("valid test key"))
 }
 
 pub struct TestResponse {
@@ -89,6 +94,7 @@ impl TestResponse {
     }
 }
 
+#[derive(Clone)]
 pub struct TestApp {
     pub state: AppState,
     router: Router,
@@ -152,7 +158,11 @@ impl<'a> Req<'a> {
 
 impl TestApp {
     pub async fn new() -> Self {
-        let state = test_state().await.unwrap();
+        Self::with_config(&security_config()).await
+    }
+
+    pub async fn with_config(config: &SecurityConfig) -> Self {
+        let state = test_state_with(config).await.unwrap();
         let router = merton_api::http::router(state.clone());
         Self { state, router }
     }

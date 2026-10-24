@@ -8,6 +8,7 @@ use sea_orm_migration::MigratorTrait;
 use tokio::net::TcpListener;
 
 use crate::auth::csrf::{CsrfKey, InvalidKey};
+use crate::auth::password::HashLimiter;
 use crate::auth::rate_limit::LoginRateLimiter;
 use crate::config::{Config, SecurityConfig};
 use crate::http;
@@ -43,6 +44,7 @@ pub struct AppState {
 pub struct Security {
     pub csrf: CsrfKey,
     pub login_limiter: LoginRateLimiter,
+    pub hash_limiter: HashLimiter,
     pub trusted_origins: Vec<String>,
     pub trusted_proxies: Vec<IpAddr>,
     pub cookie_secure: bool,
@@ -55,6 +57,7 @@ impl AppState {
             security: Arc::new(Security {
                 csrf: CsrfKey::new(&config.secret_key)?,
                 login_limiter: LoginRateLimiter::default(),
+                hash_limiter: HashLimiter::new(config.max_concurrent_hashes),
                 trusted_origins: config.trusted_origins.clone(),
                 trusted_proxies: config.trusted_proxies.clone(),
                 cookie_secure: config.cookie_secure,
@@ -70,6 +73,7 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
         trusted_origins = ?config.security.trusted_origins,
         trusted_proxies = ?config.security.trusted_proxies,
         cookie_secure = config.security.cookie_secure,
+        max_concurrent_hashes = config.security.max_concurrent_hashes,
         "security configuration loaded"
     );
     if !config.security.cookie_secure {

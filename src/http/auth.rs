@@ -60,6 +60,8 @@ pub struct CsrfTokenResponse {
         (status = CONFLICT, description = "Email already registered", body = ProblemDetails, content_type = "application/problem+json"),
         (status = UNPROCESSABLE_ENTITY, description = "Invalid email or password policy violation", body = ProblemDetails, content_type = "application/problem+json"),
         (status = TOO_MANY_REQUESTS, description = "Too many attempts from this client", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = SERVICE_UNAVAILABLE, description = "Password hashing capacity exhausted (`service_overloaded`); see Retry-After", body = ProblemDetails, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Seconds to wait before retrying"))),
     ),
 )]
 pub async fn register(
@@ -71,6 +73,7 @@ pub async fn register(
     let user = service::register(
         &state.db,
         &state.security.login_limiter,
+        &state.security.hash_limiter,
         client_ip,
         &body.email,
         body.password,
@@ -93,6 +96,8 @@ pub async fn register(
         (status = FORBIDDEN, description = "Untrusted request origin", body = ProblemDetails, content_type = "application/problem+json"),
         (status = TOO_MANY_REQUESTS, description = "Too many attempts; see Retry-After", body = ProblemDetails, content_type = "application/problem+json",
             headers(("Retry-After" = u64, description = "Seconds until the next attempt is allowed"))),
+        (status = SERVICE_UNAVAILABLE, description = "Password hashing capacity exhausted (`service_overloaded`); see Retry-After", body = ProblemDetails, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Seconds to wait before retrying"))),
     ),
 )]
 pub async fn login(
@@ -107,6 +112,7 @@ pub async fn login(
     let outcome = service::login(
         &state.db,
         &state.security.login_limiter,
+        &state.security.hash_limiter,
         client_ip,
         &body.email,
         body.password,

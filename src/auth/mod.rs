@@ -63,6 +63,8 @@ pub enum AuthError {
     RateLimited(rate_limit::RetryAfter),
     #[error("no valid session")]
     Unauthenticated,
+    #[error("password hashing capacity exhausted")]
+    Overloaded,
     #[error(transparent)]
     Internal(#[from] InternalError),
 }

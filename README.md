@@ -58,7 +58,7 @@ automatically before the server starts accepting requests.
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 (`application/problem+json`) with a stable `code` field, for example
 `invalid_credentials`, `email_taken`, `validation_failed`, `csrf_invalid`,
-`untrusted_origin`, `rate_limited`.
+`untrusted_origin`, `rate_limited`, `service_overloaded`.
 
 A browser client logs in, then calls `GET /api/v1/auth/csrf` and sends the
 returned token as `X-CSRF-Token` on authenticated state-changing requests.
@@ -79,6 +79,7 @@ working directory is loaded if present.
 | `APP_TRUSTED_ORIGINS`      | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated origins allowed to send mutating browser requests |
 | `SESSION_COOKIE_SECURE`    | `true`                                        | `false` only allowed when every trusted origin is loopback HTTP |
 | `TRUSTED_PROXIES`          | empty                                         | Comma-separated proxy IPs whose `X-Forwarded-For` is trusted |
+| `AUTH_MAX_CONCURRENT_HASHES` | `4`                                         | Concurrent Argon2 operations (1–64, ~19 MiB each) |
 | `RUST_LOG`                 | `merton_api=info,tower_http=info,sqlx=warn`   | Log filter (`tracing` EnvFilter syntax)  |
 
 SQLite connections always enable foreign keys and WAL journaling, and the
@@ -104,17 +105,40 @@ address. Serve the public site over HTTPS and keep `SESSION_COOKIE_SECURE=true`.
   same-origin `Sec-Fetch-Site`; clients that send neither are not browsers).
   Logout additionally requires `X-CSRF-Token`: an HMAC-SHA256 of the session id
   under `APP_SECRET_KEY`, verified in constant time. No CORS headers are sent.
-- **Login rate limiting**: 5 failed logins per account and 20 attempts
-  (login and registration) per client IP (IPv6 grouped by /64) per 15 minutes.
-  Exceeding either returns `429` with `Retry-After`. Unknown accounts are
-  checked against a dummy Argon2 hash so response times do not reveal whether
-  an email is registered.
+- **Login rate limiting**: 20 attempts (login and registration) per client IP
+  (IPv6 grouped by /64) and 5 unsuccessful logins per account, per 15-minute
+  fixed window. Exceeding either returns `429` with `Retry-After` (rounded up).
+  Quota is checked and consumed in one locked step. An account slot is
+  reserved before the password is checked and returned only when a login
+  succeeds, so concurrent guesses cannot exceed the limit. Attempts against a
+  locked account still use up the client's budget. When the key table is full,
+  the entries with the lowest counts are evicted first, so flooding it with
+  fresh keys cannot lift an active lockout. Unknown accounts are checked
+  against a dummy Argon2 hash so response times do not reveal whether an email
+  is registered.
+- **Hashing capacity**: at most `AUTH_MAX_CONCURRENT_HASHES` Argon2 operations
+  run at once, covering registration, login and dummy-hash checks. When all
+  are busy, requests are rejected at once with `503 service_overloaded` and
+  `Retry-After: 1`; nothing queues. A permit is held by the blocking
+  computation itself, so a disconnected client cannot free capacity while its
+  hash is still running. Overload is detected before the account's failure
+  budget is touched and does not depend on whether the account exists.
 
 ### Known limitations
 
 - Rate limits are kept in memory per process: they reset on restart and are
   not shared between instances. Running more than one instance needs a shared
   store.
+- Fixed windows allow up to twice the limit in a burst straddling a window
+  boundary.
+- A successful login clears the account's failure count, including slots held
+  by guesses that are still in flight at that moment. An attacker who has
+  recorded some failures can therefore notice that the owner signed in during
+  the window.
+- If every tracked key is exhausted at once (10,000 keys), eviction must drop
+  an exhausted entry.
+- Overload rejects legitimate sign-ins too; the limiter protects memory and
+  CPU, not availability against a large distributed attacker.
 - `X-Forwarded-For` is honoured only from exact `TRUSTED_PROXIES` addresses
   (no CIDR ranges).
 - There is no account recovery or password reset yet. This is a required

@@ -11,6 +11,7 @@ services:
       APP_TRUSTED_ORIGINS: ${APP_TRUSTED_ORIGINS:-http://localhost:8080}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      AUTH_MAX_CONCURRENT_HASHES: ${AUTH_MAX_CONCURRENT_HASHES:-4}
       RUST_LOG: ${RUST_LOG:-merton_api=info,tower_http=info,sqlx=warn}
     ports:
       # Published on localhost only; change to "8080:8080" to expose on the network.

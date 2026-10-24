@@ -7,7 +7,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::email::Email;
-use super::password;
+use super::password::{self, HashLimiter, HashPermit};
 use super::rate_limit::LoginRateLimiter;
 use super::repository::{self, NewSession, NewUser};
 use super::session::{self, Lifetime, SessionToken};
@@ -20,20 +20,24 @@ pub struct LoginOutcome {
     pub lifetime: Lifetime,
 }
 
-/// Creates an account. Registration shares the per-client attempt budget
-/// with login because each attempt costs an Argon2 hash.
+/// Creates an account. Every registration attempt, valid or not, spends the
+/// per-client budget shared with login; only valid ones take a hashing permit.
 pub async fn register(
     db: &DatabaseConnection,
     limiter: &LoginRateLimiter,
+    hashes: &HashLimiter,
     client_ip: IpAddr,
     email: &str,
     password: String,
 ) -> Result<CurrentUser, AuthError> {
     limiter
-        .check_attempt(client_ip, None)
+        .acquire_client_attempt(client_ip)
         .map_err(AuthError::RateLimited)?;
     let email = validate_registration(email, &password)?;
-    let password_hash = run_blocking(move || password::hash(&password)).await??;
+    let password_hash = reserve_hash(hashes)?
+        .hash(password)
+        .await
+        .map_err(InternalError::from)??;
 
     let id = Uuid::now_v7();
     let new_user = NewUser {
@@ -79,9 +83,21 @@ fn validate_registration(email: &str, password: &str) -> Result<Email, AuthError
 
 /// Verifies credentials and opens a new session, revoking `previous_token`
 /// if the client presented one.
+///
+/// Checks run in this order, each before the work it guards:
+/// 1. the client's attempt budget (429);
+/// 2. the account lookup, done before taking a permit so database latency
+///    never holds scarce hashing capacity;
+/// 3. a hashing permit (503), taken only if verification will run and before
+///    the account budget, so overload never consumes failure slots;
+/// 4. the account's failure budget (429), reserved before verification so
+///    concurrent guesses cannot exceed it.
+///
+/// None of these depend on whether the account exists.
 pub async fn login(
     db: &DatabaseConnection,
     limiter: &LoginRateLimiter,
+    hashes: &HashLimiter,
     client_ip: IpAddr,
     email: &str,
     password: String,
@@ -90,7 +106,7 @@ pub async fn login(
     let email = Email::parse(email).ok();
     let normalized_email = email.as_ref().map(Email::normalized);
     limiter
-        .check_attempt(client_ip, normalized_email)
+        .acquire_client_attempt(client_ip)
         .map_err(AuthError::RateLimited)?;
 
     let user = match normalized_email {
@@ -98,23 +114,36 @@ pub async fn login(
         None => None,
     };
 
-    // Unknown accounts are verified against a dummy hash so that both cases
-    // take about the same time. Over-long input is rejected before hashing.
-    let verified = if password.chars().count() <= password::MAX_PASSWORD_CHARS {
-        let stored_hash = user.as_ref().map(|u| u.password_hash.clone());
-        run_blocking(move || password::verify(&password, stored_hash.as_deref())).await?
+    // Over-long input can never match (registration rejects it), so it fails
+    // without hashing; it still counts as a failed attempt below.
+    let permit = if password.chars().count() <= password::MAX_PASSWORD_CHARS {
+        Some(reserve_hash(hashes)?)
     } else {
-        false
+        None
+    };
+    if let Some(normalized) = normalized_email {
+        limiter
+            .acquire_account_attempt(normalized)
+            .map_err(AuthError::RateLimited)?;
+    }
+
+    // Unknown accounts are verified against a dummy hash so that both cases
+    // take about the same time.
+    let verified = match permit {
+        Some(permit) => {
+            let stored_hash = user.as_ref().map(|u| u.password_hash.clone());
+            permit
+                .verify(password, stored_hash)
+                .await
+                .map_err(InternalError::from)?
+        }
+        None => false,
     };
 
+    // A failed attempt keeps the account slot it reserved above.
     let user = match user {
         Some(user) if verified => user,
-        _ => {
-            if let Some(normalized) = normalized_email {
-                limiter.record_failure(normalized);
-            }
-            return Err(AuthError::InvalidCredentials);
-        }
+        _ => return Err(AuthError::InvalidCredentials),
     };
     if let Some(normalized) = normalized_email {
         limiter.record_success(normalized);
@@ -208,12 +237,11 @@ pub async fn logout(db: &DatabaseConnection, session_id: Uuid) -> Result<(), Aut
     Ok(())
 }
 
-async fn run_blocking<T: Send + 'static>(
-    f: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, AuthError> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|err| AuthError::Internal(err.into()))
+fn reserve_hash(hashes: &HashLimiter) -> Result<HashPermit, AuthError> {
+    hashes.try_reserve().map_err(|_| {
+        tracing::warn!("password hashing capacity exhausted; rejecting request");
+        AuthError::Overloaded
+    })
 }
 
 impl From<password::HashError> for AuthError {

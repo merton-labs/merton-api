@@ -12,6 +12,9 @@ const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 5;
 const DEFAULT_DATABASE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_TRUSTED_ORIGINS: &str = "http://localhost:8080,http://127.0.0.1:8080";
 const MIN_SECRET_KEY_BYTES: usize = 32;
+const DEFAULT_MAX_CONCURRENT_HASHES: usize = 4;
+/// Each Argon2 operation holds ~19 MiB, so 64 caps hashing memory at ~1.2 GiB.
+const MAX_CONCURRENT_HASHES_LIMIT: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -75,6 +78,8 @@ pub struct SecurityConfig {
     pub trusted_proxies: Vec<IpAddr>,
     /// Whether session cookies carry `Secure` (and the `__Host-` prefix).
     pub cookie_secure: bool,
+    /// Maximum concurrent Argon2 operations; more are rejected with 503.
+    pub max_concurrent_hashes: usize,
 }
 
 impl fmt::Debug for SecurityConfig {
@@ -84,6 +89,7 @@ impl fmt::Debug for SecurityConfig {
             .field("trusted_origins", &self.trusted_origins)
             .field("trusted_proxies", &self.trusted_proxies)
             .field("cookie_secure", &self.cookie_secure)
+            .field("max_concurrent_hashes", &self.max_concurrent_hashes)
             .finish()
     }
 }
@@ -161,11 +167,25 @@ fn security_from(lookup: &impl Fn(&str) -> Option<String>) -> Result<SecurityCon
         });
     }
 
+    let max_concurrent_hashes = parse_or(
+        &lookup,
+        "AUTH_MAX_CONCURRENT_HASHES",
+        DEFAULT_MAX_CONCURRENT_HASHES,
+    )?;
+    if !(1..=MAX_CONCURRENT_HASHES_LIMIT).contains(&max_concurrent_hashes) {
+        return Err(ConfigError::InvalidValue {
+            name: "AUTH_MAX_CONCURRENT_HASHES",
+            value: max_concurrent_hashes.to_string(),
+            reason: format!("must be between 1 and {MAX_CONCURRENT_HASHES_LIMIT}"),
+        });
+    }
+
     Ok(SecurityConfig {
         secret_key,
         trusted_origins,
         trusted_proxies,
         cookie_secure,
+        max_concurrent_hashes,
     })
 }
 
@@ -273,6 +293,7 @@ mod tests {
         );
         assert!(config.security.trusted_proxies.is_empty());
         assert!(config.security.cookie_secure);
+        assert_eq!(config.security.max_concurrent_hashes, 4);
     }
 
     #[test]
@@ -285,6 +306,7 @@ mod tests {
             ("DATABASE_BUSY_TIMEOUT_MS", "250"),
             ("APP_TRUSTED_ORIGINS", "https://Merton.Example.com:443/"),
             ("TRUSTED_PROXIES", "10.0.0.2, ::1"),
+            ("AUTH_MAX_CONCURRENT_HASHES", "8"),
         ])
         .unwrap();
 
@@ -303,6 +325,25 @@ mod tests {
                 "::1".parse().unwrap()
             ]
         );
+        assert_eq!(config.security.max_concurrent_hashes, 8);
+    }
+
+    #[test]
+    fn rejects_out_of_range_hash_concurrency() {
+        for value in ["0", "65", "-1", "many"] {
+            let err = config_from(&[("AUTH_MAX_CONCURRENT_HASHES", value)]).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::InvalidValue {
+                        name: "AUTH_MAX_CONCURRENT_HASHES",
+                        ..
+                    }
+                ),
+                "{value}"
+            );
+        }
+        assert!(config_from(&[("AUTH_MAX_CONCURRENT_HASHES", "64")]).is_ok());
     }
 
     #[test]
