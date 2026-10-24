@@ -1,7 +1,7 @@
 //! Owner-scoped portfolio queries. Every function filters by the owner, so a
 //! portfolio belonging to another user is invisible here.
 
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, Query, SelectStatement};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Select,
@@ -12,6 +12,25 @@ use uuid::Uuid;
 use super::PortfolioStatus;
 use crate::auth::UserId;
 use crate::infrastructure::entities::portfolio::{self, Column, Entity};
+
+/// `SELECT 1 FROM portfolios WHERE id = ? AND owner_user_id = ? [AND status = 'ACTIVE']`,
+/// for use in `EXISTS` guards on tables that belong to a portfolio.
+pub(crate) fn owned_portfolio(
+    owner: UserId,
+    portfolio_id: Uuid,
+    active_only: bool,
+) -> SelectStatement {
+    let mut select = Query::select();
+    select
+        .expr(Expr::value(1))
+        .from(Entity)
+        .and_where(Column::Id.eq(portfolio_id))
+        .and_where(Column::OwnerUserId.eq(owner.as_uuid()));
+    if active_only {
+        select.and_where(Column::Status.eq(PortfolioStatus::Active.as_str()));
+    }
+    select
+}
 
 fn owned(owner: UserId) -> Select<Entity> {
     Entity::find().filter(Column::OwnerUserId.eq(owner.as_uuid()))
@@ -131,6 +150,24 @@ pub async fn lock_owned(
         .col_expr(Column::UpdatedAt, Expr::value(now))
         .filter(Column::OwnerUserId.eq(owner.as_uuid()))
         .filter(Column::Id.eq(id))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected)
+}
+
+/// Like [`lock_owned`], but only matches an `ACTIVE` portfolio: the first
+/// statement of every financial write (ADR-DB-09, ADR-PORT-03).
+pub async fn lock_active(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    id: Uuid,
+    now: OffsetDateTime,
+) -> Result<u64, DbErr> {
+    let result = Entity::update_many()
+        .col_expr(Column::UpdatedAt, Expr::value(now))
+        .filter(Column::OwnerUserId.eq(owner.as_uuid()))
+        .filter(Column::Id.eq(id))
+        .filter(Column::Status.eq(PortfolioStatus::Active.as_str()))
         .exec(db)
         .await?;
     Ok(result.rows_affected)

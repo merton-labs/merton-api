@@ -16,12 +16,13 @@ base64ct = "1.7"
 dotenvy = "0.15.7"
 getrandom = "0.4.3"
 hmac = "0.13.0"
+rust_decimal = { version = "1.43.0", default-features = false, features = ["std"] }
 sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio", "sqlx-sqlite", "with-time", "with-uuid"] }
 sea-orm-migration = { version = "2.0.4", default-features = false, features = ["runtime-tokio", "sqlx-sqlite", "with-time", "with-uuid"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.1"
 thiserror = "2.0.21"
-time = { version = "0.3.55", features = ["formatting", "serde"] }
+time = { version = "0.3.55", features = ["formatting", "macros", "parsing", "serde"] }
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
 tower-http = { version = "0.7.1", features = ["set-header", "trace"] }
 tracing = "0.1.44"

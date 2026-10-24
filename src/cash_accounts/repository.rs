@@ -2,7 +2,7 @@
 //! the parent portfolio belongs to the owner; writes also require it to be
 //! `ACTIVE`, so an archive cannot race a change.
 
-use sea_orm::sea_query::{Expr, Query, SelectStatement};
+use sea_orm::sea_query::{Expr, Query};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect, Select,
@@ -12,22 +12,7 @@ use uuid::Uuid;
 
 use crate::auth::UserId;
 use crate::infrastructure::entities::cash_account::{self, Column, Entity};
-use crate::infrastructure::entities::portfolio;
-use crate::portfolios::PortfolioStatus;
-
-/// `SELECT 1 FROM portfolios WHERE id = ? AND owner_user_id = ? [AND status = 'ACTIVE']`.
-fn owned_portfolio(owner: UserId, portfolio_id: Uuid, active_only: bool) -> SelectStatement {
-    let mut select = Query::select();
-    select
-        .expr(Expr::value(1))
-        .from(portfolio::Entity)
-        .and_where(portfolio::Column::Id.eq(portfolio_id))
-        .and_where(portfolio::Column::OwnerUserId.eq(owner.as_uuid()));
-    if active_only {
-        select.and_where(portfolio::Column::Status.eq(PortfolioStatus::Active.as_str()));
-    }
-    select
-}
+use crate::portfolios::repository::owned_portfolio;
 
 fn in_owned_portfolio(owner: UserId, portfolio_id: Uuid) -> Select<Entity> {
     Entity::find()

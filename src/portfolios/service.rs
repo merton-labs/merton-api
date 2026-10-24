@@ -14,6 +14,7 @@ use crate::auth::{FieldError, UserId};
 use crate::cash_accounts::repository as cash_accounts;
 use crate::infrastructure::database::is_foreign_key_violation;
 use crate::infrastructure::entities::portfolio;
+use crate::ledger::repository as ledger;
 use crate::pagination::Page;
 use crate::validation::{CurrencyCode, DisplayName, check};
 
@@ -168,12 +169,12 @@ pub async fn restore(
 /// 2. remove its cash accounts, which are not history by themselves;
 /// 3. remove the portfolio.
 ///
-/// History is protected by the database: ledger tables reference cash
-/// accounts and portfolios with immediate `ON DELETE RESTRICT`, so any step
-/// that would orphan a financial record fails, the transaction rolls back,
-/// and this returns [`PortfolioError::HasFinancialHistory`]. Nothing is ever
-/// cascaded. A phase that adds a table referencing portfolios must extend
-/// this function to handle it explicitly.
+/// A portfolio with any ledger transaction is refused explicitly. The
+/// database also protects history: ledger tables reference cash accounts and
+/// portfolios with immediate `ON DELETE RESTRICT`, so any step that would
+/// orphan a financial record fails and the transaction rolls back. Nothing
+/// is ever cascaded. A phase that adds a table referencing portfolios must
+/// extend this function to handle it explicitly.
 pub async fn delete(
     db: &DatabaseConnection,
     owner: UserId,
@@ -182,17 +183,20 @@ pub async fn delete(
     let result = async {
         let txn = db.begin().await?;
         if repository::lock_owned(&txn, owner, id, OffsetDateTime::now_utc()).await? == 0 {
-            return Ok(false);
+            return Ok(Err(PortfolioError::NotFound));
+        }
+        // Explicit check; the RESTRICT foreign keys below are the backstop.
+        if ledger::any_in_portfolio(&txn, id).await? {
+            return Ok(Err(PortfolioError::HasFinancialHistory));
         }
         cash_accounts::delete_all_in_portfolio(&txn, id).await?;
         repository::delete(&txn, owner, id).await?;
         txn.commit().await?;
-        Ok(true)
+        Ok(Ok(()))
     }
     .await;
     match result {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(PortfolioError::NotFound),
+        Ok(outcome) => outcome,
         Err(err) if is_foreign_key_violation(&err) => Err(PortfolioError::HasFinancialHistory),
         Err(err) => Err(err.into()),
     }

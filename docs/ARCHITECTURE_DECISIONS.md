@@ -331,6 +331,7 @@ Every decision uses the same fields:
   - `service_overloaded`
   - `portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history` (P2A)
   - `instrument_in_use`, `cash_account_in_use` (P2B)
+  - `insufficient_holdings` (P3, `409`, with the date in `detail`)
   - `internal_error`
 - **Consequences:** Never change an existing code's meaning. Never leak SQL
   errors, stack traces, secrets or other users' data; internal errors are
@@ -730,6 +731,38 @@ Every decision uses the same fields:
 - **Consequences:** Propose the physical schema (columns, types,
   constraints, indexes) at the start of P3, and get it approved before
   writing migrations.
+- **P3 schema: Proposed, implemented provisionally** (migration
+  `m20261024_000006_create_ledger`). It was reviewed by an AGY design pass
+  before implementation. Awaiting owner confirmation.
+  - **`transactions`:** `id`, `portfolio_id`, `kind`, `trade_date` DATE,
+    `sort_order` INT, nullable `instrument_id` / `cash_account_id`, nullable
+    decimal-text `quantity`, `price`, `fee`, `tax`, `amount`, `note` (≤500),
+    and timestamps. It stores the user's input. Index
+    `(portfolio_id, trade_date, sort_order, id)`.
+  - **`position_movements`:** `transaction_id`, `portfolio_id`,
+    `instrument_id`, `kind` (`ACQUIRE`/`DISPOSE`), positive `quantity`, and
+    `amount` (lot cost for an acquisition, net proceeds for a disposal).
+    Holdings and FIFO are derived only from these rows.
+  - **`cash_movements`:** `transaction_id`, `portfolio_id`,
+    `cash_account_id`, and a signed `amount_delta`. Cash balances are
+    derived only from these rows.
+  - **Foreign keys:** every FK to a portfolio, instrument, cash account or
+    transaction is immediate `ON DELETE RESTRICT`.
+  - **`kind` columns:** no `CHECK` constraint, because P4 adds values and
+    SQLite cannot alter a `CHECK` without rebuilding the table. Rust
+    validates them on read and write.
+  - **P4 extension:** additive only. Splits and stock dividends add
+    movement kinds. Transfers and FX exchanges post two cash movements and
+    add nullable transaction columns through `ADD COLUMN`.
+  - **FIFO in P4:** P3's pure `fifo::Event` only acquires and disposes.
+    Splits and stock dividends change existing lots rather than opening
+    new ones, so P4 must add lot-adjusting events (raised by the AGY
+    review; not built in P3).
+  - **Indexes on `cash_movements`:** `(cash_account_id)` and
+    `(transaction_id)`. An AGY review suggested adding
+    `(portfolio_id, cash_account_id)`; it was not added, because a cash
+    account belongs to exactly one portfolio, so the `cash_account_id`
+    index already serves balance queries.
 
 ### ADR-LEDG-03 — Atomic related writes
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3 onward
@@ -766,20 +799,40 @@ Every decision uses the same fields:
 - **Decision:** A trade settles in the currency of the selected cash
   account. The cash movement for a buy or sell is optional: a transaction
   may be recorded without updating any cash account.
+- **P3 (Implementation):**
+  - Prices, fees and taxes are in the instrument's quote currency.
+  - A selected cash account must use that same currency, otherwise the
+    request gets `422`. Trading across currencies needs FX and waits for P4.
+  - Buy: cost = quantity × price + fee + tax, and cash moves by −cost.
+  - Sell: proceeds = quantity × price − fee − tax, and cash moves by
+    +proceeds.
+  - Every amount is computed exactly with checked arithmetic. Net proceeds
+    may be negative, which records a loss.
 
 ### ADR-LEDG-07 — Opening balances
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3
 - **Decision:** An opening position (one or several FIFO lots) can be
   recorded without a cash movement. An opening cash balance is recorded as
   a ledger transaction.
+- **Several lots: Proposed, implemented provisionally in P3.**
+  - Each `OPENING_POSITION` transaction is one lot (`quantity`, `amount` =
+    total cost basis), dated by its acquisition date. Several lots are
+    entered as several transactions.
+  - `OPENING_CASH` sets one account's signed starting balance.
+  - Awaiting owner confirmation.
 
 ### ADR-LEDG-08 — Historical ordering
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3
 - **Decision:** Ordering uses the transaction date plus an explicit
   `sort_order`. There is no settlement date in the MVP. Historical replay
   follows this order.
-- **Open detail:** the exact `sort_order` semantics (scope, default, and how
-  ties are broken).
+- **`sort_order` semantics: Proposed, implemented provisionally in P3.**
+  - It is a portfolio-wide integer, default 0, that orders transactions on
+    the same `trade_date` (lower first).
+  - Remaining ties are broken by the time-ordered `id`, which is entry
+    order. `created_at` is not used, because SQLite stores it as text whose
+    sub-second formatting does not sort reliably (AGY design review).
+  - Awaiting owner confirmation.
 
 ### ADR-LEDG-09 — Direct edit and delete with revalidation
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3
@@ -790,6 +843,24 @@ Every decision uses the same fields:
   - recomputes the affected FIFO history
   - validates the resulting historical holdings
   - rejects the change if anything becomes invalid
+- **P3 implementation:** each create, replace (PUT) and delete runs as one
+  DB transaction:
+  1. a guarded write locks the owned, `ACTIVE` portfolio (ADR-DB-09);
+  2. references are checked;
+  3. the transaction is written and its movements rewritten;
+  4. FIFO is replayed from full history for every affected instrument,
+     including both the old and the new one on an edit;
+  5. the transaction commits.
+  If a holding would go negative at any date, the result is
+  `409 insufficient_holdings` naming the date, and nothing is written.
+  - **Evidence:** a stress test sent 20 concurrent sells of 3 against a
+    holding of 10, over 3 rounds. Each round accepted exactly 3 and refused
+    17, with no `500`s.
+  - **Deleted references:** if a referenced instrument or cash account is
+    deleted between the reference check and the insert, the foreign-key
+    refusal is returned as `422 validation_failed` instead of `500`.
+    SQLite serializes writers, so this can only happen on a database with
+    concurrent writers (such as PostgreSQL); it is not covered by a test.
 
 ### ADR-LEDG-10 — Economic cost basis only
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3, P4
@@ -872,8 +943,9 @@ Every decision uses the same fields:
 - **Status:** Accepted · **Source:** Owner · **Phases:** P2B onward
 - **Decision:** Exact financial amounts never use `f32`/`f64` or SQLite
   `REAL`. In Rust they use `rust_decimal::Decimal`.
-- **Consequences:** `rust_decimal` has not been added yet; add it in the
-  first phase that stores a financial value.
+- **Consequences:** `rust_decimal` 1.43 was added in P3, without serde.
+  Decimal strings are parsed and formatted explicitly in
+  `crate::ledger::decimal`.
 
 ### ADR-NUM-02 — Decimal storage in SQLite
 - **Status:** Accepted (principle) / **Open** (per-field choice) · **Source:** Owner · **Phases:** P2B onward
@@ -887,6 +959,14 @@ Every decision uses the same fields:
   SQLite map `Decimal`**. Do not trust the default mapping. Use a `TEXT`
   column with explicit conversion if that is what it takes to preserve
   exactness.
+- **P3 (Implementation):**
+  - Ledger decimals are stored in `VARCHAR`/TEXT columns mapped to Rust
+    `String`, and converted explicitly. SeaORM's `Decimal` mapping is never
+    used. A test asserts SQLite `typeof(...) = 'text'`.
+  - Stored text is re-checked against its sign rule when read
+    (`from_stored`).
+  - The text keeps the scale that was entered (`"100.50"` stays
+    `"100.50"`).
 
 ### ADR-NUM-03 — Distinct numeric kinds
 - **Status:** Accepted · **Source:** Owner · **Phases:** P2B onward
@@ -896,9 +976,18 @@ Every decision uses the same fields:
   so they cannot be mixed up.
 
 ### ADR-NUM-04 — Precision limits
-- **Status:** **Open** · **Phases:** P2B, P3
-- **Decision:** The maximum scale and integer digits for each kind, and
-  the supported currency minor units, are undecided.
+- **Status:** **Proposed, implemented provisionally in P3** · **Phases:** P3
+- **Decision (provisional):**
+  - **Limits:** every input decimal has at most 8 digits after the point
+    and at most 15 significant digits before it.
+  - **Sign rules:** quantity > 0; price ≥ 0; fee, tax and cost basis ≥ 0;
+    opening cash is signed.
+  - **Grammar:** strict. An optional `-`, digits, and an optional `.digits`.
+    `+`, exponents, `_` separators and JSON numbers are rejected.
+  - **Derived values:** these may have more decimals. For example
+    quantity × price can reach 16, and they are stored exactly.
+  - **Minor units:** not enforced per currency.
+- Awaiting owner confirmation.
 
 ### ADR-NUM-05 — Rounding policy
 - **Status:** Accepted (principle) / **Open** (per-operation rules) · **Source:** Owner · **Phases:** P3–P5
@@ -907,6 +996,24 @@ Every decision uses the same fields:
   such as display, settlement amounts and allocation residuals, and every
   operation validates against overflow.
 - **Open:** the rounding mode and scale for each operation.
+- **P3 FIFO allocation: Proposed, implemented provisionally.**
+  - **No rounding needed:** trade amounts are exact, with no rounding.
+  - **Whole lot:** consuming a whole lot takes its remaining cost exactly.
+  - **Partial lot:** consuming part of a lot takes
+    `cost × taken / quantity`, rounded half-to-even to 10 decimal places.
+  - **Conservation:** the lot keeps the exact remainder, so allocated cost
+    plus open cost always equals acquired cost.
+  - **Verification:** checked by an independent AGY spec suite with
+    hand-derived values, and by mutation testing.
+  - **Exact arithmetic everywhere else (Proposed):** `rust_decimal`
+    silently rounds a result that needs more than 28 significant digits.
+    So trade amounts (quantity × price ± fee ± tax) and every FIFO running
+    total (open quantity, open cost, lot remainders, cost basis, realized
+    P/L) are computed exactly on the integer mantissa. If the exact result
+    cannot be represented, the write is rejected with
+    `422 validation_failed` instead of being rounded. The deliberate
+    10-place allocation rounding above is the only rounding in P3.
+  - Awaiting owner confirmation.
 
 ---
 
@@ -1067,10 +1174,11 @@ Every decision uses the same fields:
 | ADR-PORT-04 | Confirm unused cash accounts are deleted with their portfolio (implemented provisionally) | Confirmation only |
 | ADR-INST-04 | Confirm bank deposits are plain cash accounts (implemented provisionally) | Confirmation only |
 | ADR-INST-02 | Confirm deferring the instrument metadata column (implemented provisionally) | Confirmation only |
-| ADR-NUM-02 / NUM-04 | Decimal column types and precision limits per numeric kind (P2B needed none) | P3 |
-| ADR-LEDG-02 | Physical ledger schema | P3 |
-| ADR-LEDG-08 | `sort_order` semantics | P3 |
-| ADR-NUM-05 | Per-operation rounding rules | P3–P5 |
+| ADR-NUM-04 | Confirm decimal limits (8 dp, 15 integer digits) (implemented provisionally) | Confirmation only |
+| ADR-LEDG-02 | Confirm the P3 ledger schema (implemented provisionally) | Confirmation only |
+| ADR-LEDG-07 | Confirm one OPENING_POSITION per lot (implemented provisionally) | Confirmation only |
+| ADR-LEDG-08 | Confirm `sort_order` semantics (implemented provisionally) | Confirmation only |
+| ADR-NUM-05 | Confirm FIFO allocation rounding (implemented provisionally); rounding for P4/P5 operations | P4–P5 |
 | ADR-TXN-01 | Modelling of Tax Return | P4 |
 | ADR-TXN-04 | Fee placement rules for transfers and FX exchanges | P4 |
 | ADR-TXN-07 | Stock-dividend and cash-in-lieu allocation and rounding | P4 |

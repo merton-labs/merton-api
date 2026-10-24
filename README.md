@@ -2,10 +2,11 @@
 
 Backend for **Merton**, an open-source, self-hosted, multi-user investment portfolio tracker.
 
-> **Status: reference data.** The server foundation, local email/password
-> accounts with server-managed cookie sessions, private portfolios, and
-> their reference data (instruments and cash accounts) are implemented. The
-> transaction ledger, valuation and CSV import are not built yet. See
+> **Status: ledger.** The server foundation, local email/password accounts
+> with server-managed cookie sessions, private portfolios, instruments, cash
+> accounts, and the transaction ledger (opening balances, buys and sells
+> with FIFO validation) are implemented. Income, transfers, FX, corporate
+> actions, valuation and CSV import are not built yet. See
 > [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the roadmap and
 > [CLAUDE.md](CLAUDE.md) for contributor rules.
 
@@ -74,18 +75,47 @@ automatically before the server starts accepting requests.
 | GET    | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie | Get a cash account          |
 | PATCH  | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie + CSRF | Rename (currency is fixed) |
 | DELETE | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie + CSRF | Delete an account with no movements (`204`) |
+| GET    | `/api/v1/portfolios/{id}/transactions` | cookie | List transactions in ledger order (`limit`, `offset`, `instrument_id`) |
+| POST   | `/api/v1/portfolios/{id}/transactions` | cookie + CSRF | Record `OPENING_POSITION`, `OPENING_CASH`, `BUY` or `SELL` |
+| GET    | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie | Get a transaction |
+| PUT    | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie + CSRF | Replace a transaction; history is re-validated |
+| DELETE | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie + CSRF | Delete a transaction; history is re-validated |
 
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 (`application/problem+json`) with a stable `code` field, for example
 `invalid_credentials`, `email_taken`, `validation_failed`, `csrf_invalid`,
 `untrusted_origin`, `rate_limited`, `service_overloaded`, `not_found`,
 `portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history`,
-`instrument_in_use`, `cash_account_in_use`.
+`instrument_in_use`, `cash_account_in_use`, `insufficient_holdings`.
 
 Instruments use the asset classes `STOCK`, `ETF` and `MUTUAL_FUND`. Their
 symbol, ISIN and exchange are optional and need not be unique, and ISINs
 are checked against their check digit. Cash, including bank deposits, lives
 in cash accounts: a portfolio can have several, even in the same currency.
+
+### Ledger
+
+- **Ordering:** transactions are ordered by `trade_date`, then
+  `sort_order` (default 0), then entry order.
+- **Kinds and required fields:**
+  - `OPENING_POSITION`: `instrument_id`, `quantity` and `amount` (total cost
+    basis of one lot).
+  - `OPENING_CASH`: `cash_account_id` and a signed `amount`.
+  - `BUY` and `SELL`: `instrument_id`, `quantity` and `price`, with optional
+    `fee`, `tax` and `cash_account_id`. The cash account must use the
+    instrument's quote currency.
+- **Decimals:** sent as JSON **strings** (at most 8 decimals and 15
+  integer digits) and stored exactly as entered. Binary floating point is
+  never used. Amounts and FIFO totals are computed exactly; a result too
+  large or too precise to represent exactly is rejected with `422`, never
+  rounded. The only rounding is the cost taken from a partly sold lot
+  (half-to-even, 10 places), and the lot keeps the exact remainder.
+- **Validation:** every change replays FIFO from full history. A sale that
+  exceeds holdings at its date, or an edit or delete that would leave a
+  later sale uncovered, is rejected with `409 insufficient_holdings` and
+  nothing is written.
+- **Derived values:** holdings and cash balances come from the movements;
+  they are not stored.
 
 Portfolios belong to exactly one user. Another user's portfolio is reported
 as `404`, exactly like one that does not exist.
@@ -222,6 +252,7 @@ src/
 ├── portfolios/          # Portfolio rules, owner-scoped queries, use cases
 ├── instruments/         # Instruments (asset class, identifiers, quote currency)
 ├── cash_accounts/       # Cash accounts, owned through their portfolio
+├── ledger/              # Decimals, FIFO, transactions and their movements
 ├── validation.rs        # Shared value types (names, currency codes)
 ├── pagination.rs        # Shared limit/offset paging
 ├── http/                # Router, handlers, extractors, errors, OpenAPI

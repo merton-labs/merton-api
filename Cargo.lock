@@ -1489,6 +1489,7 @@ dependencies = [
  "dotenvy",
  "getrandom 0.4.3",
  "hmac",
+ "rust_decimal",
  "sea-orm",
  "sea-orm-migration",
  "serde",

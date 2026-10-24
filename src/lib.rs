@@ -7,6 +7,7 @@ pub mod config;
 pub mod http;
 pub mod infrastructure;
 pub mod instruments;
+pub mod ledger;
 pub mod pagination;
 pub mod portfolios;
 pub mod validation;

@@ -4,7 +4,7 @@
 //! because tickers and listings are ambiguous (ADR-INST-01). The quote
 //! currency is fixed when the instrument is created (ADR-INST-03).
 
-mod repository;
+pub(crate) mod repository;
 pub mod service;
 
 use sea_orm::DbErr;

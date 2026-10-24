@@ -126,6 +126,10 @@ impl<'a> Req<'a> {
         Self::new(Method::DELETE, uri).header("origin", ORIGIN)
     }
 
+    pub fn put(uri: &'a str) -> Self {
+        Self::new(Method::PUT, uri).header("origin", ORIGIN)
+    }
+
     fn new(method: Method, uri: &'a str) -> Self {
         Self {
             method,

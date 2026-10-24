@@ -11,6 +11,7 @@ use utoipa::ToSchema;
 use crate::auth::{AuthError, FieldError};
 use crate::cash_accounts::CashAccountError;
 use crate::instruments::InstrumentError;
+use crate::ledger::service::LedgerError;
 use crate::portfolios::PortfolioError;
 
 const PROBLEM_JSON: &str = "application/problem+json";
@@ -68,6 +69,7 @@ pub enum ApiError {
         code: &'static str,
         detail: &'static str,
     },
+    InsufficientHoldings(String),
     Validation(Vec<FieldError>),
     RateLimited(Duration),
     Overloaded,
@@ -102,6 +104,11 @@ impl ApiError {
                 "No resource exists at this path.".to_owned(),
             ),
             Self::Conflict { code, detail } => (StatusCode::CONFLICT, code, (*detail).to_owned()),
+            Self::InsufficientHoldings(detail) => (
+                StatusCode::CONFLICT,
+                "insufficient_holdings",
+                detail.clone(),
+            ),
             Self::EmailTaken => (
                 StatusCode::CONFLICT,
                 "email_taken",
@@ -244,6 +251,30 @@ impl From<CashAccountError> for ApiError {
             },
             CashAccountError::Database(err) => {
                 tracing::error!(error = %err, "cash account database error");
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<LedgerError> for ApiError {
+    fn from(err: LedgerError) -> Self {
+        match err {
+            LedgerError::Validation(fields) => Self::Validation(fields),
+            LedgerError::NotFound => Self::NotFound,
+            LedgerError::PortfolioArchived => Self::Conflict {
+                code: "portfolio_archived",
+                detail: "The portfolio is archived. Restore it before changing it.",
+            },
+            LedgerError::InsufficientHoldings {
+                instrument_id,
+                trade_date,
+            } => Self::InsufficientHoldings(format!(
+                "Holdings of instrument {instrument_id} would go negative on {trade_date}. \
+                 Sell no more than is held at each point in history."
+            )),
+            LedgerError::Database(err) => {
+                tracing::error!(error = %err, "ledger database error");
                 Self::Internal
             }
         }

@@ -34,8 +34,9 @@ separate repository.
 | P1 (authentication) | Completed |
 | P1.1 (auth hardening) | Completed |
 | P2A (portfolios) | Completed (`c5e812d`, CI green; some decisions provisional) |
-| P2B (instruments, cash accounts) | Completed (some decisions provisional; see §17) |
-| P3 (ledger, FIFO) | Next; not started |
+| P2B (instruments, cash accounts) | Completed (`04bb1b9`, CI green; some decisions provisional) |
+| P3 (ledger, FIFO) | Completed (verified locally; decisions provisional, see §17) |
+| P4 (financial transactions, corporate actions) | Next; not started |
 
 ## 2. Product Goals
 
@@ -131,6 +132,7 @@ src/
 ├── portfolios/             # portfolio domain types, owner-scoped repository, service
 ├── instruments/            # instrument types (asset class, ISIN), owner-scoped repository, service
 ├── cash_accounts/          # cash accounts owned through their portfolio
+├── ledger/                 # decimal.rs, fifo.rs (pure), transaction.rs (validation, effects), repository, service
 ├── validation.rs           # shared DisplayName, CurrencyCode, field-error collector
 ├── pagination.rs           # shared Page / Paged
 ├── auth/                   # framework-independent authentication logic
@@ -139,16 +141,17 @@ src/
 │   └── service.rs          # register / login / authenticate / logout
 ├── http/                   # Axum adapters for all features
 │   ├── mod.rs              # router, OpenAPI document, layers
-│   ├── auth.rs  health.rs  # handlers
+│   ├── auth.rs  health.rs  portfolios.rs  instruments.rs  cash_accounts.rs  transactions.rs
 │   ├── extract.rs          # ApiJson, ClientIp, TrustedOrigin, CurrentSession, CsrfProtectedSession
 │   └── error.rs            # ApiError → RFC 9457 Problem Details
 └── infrastructure/
     ├── database.rs         # pool + SQLite pragmas (only SQLite-specific code)
-    ├── entities/           # user, user_session, portfolio, instrument, cash_account
-    └── migrations/         # m20261024_000001 … m20261024_000005
+    ├── entities/           # user, user_session, portfolio, instrument, cash_account, transaction, position_movement, cash_movement
+    └── migrations/         # m20261024_000001 … m20261024_000006
 tests/
 ├── common/mod.rs           # TestApp harness: isolated in-memory SQLite per test
 ├── auth.rs  database.rs  http.rs  portfolios.rs  instruments.rs  cash_accounts.rs
+├── ledger.rs  transactions_api.rs  fifo_spec.rs
 ```
 
 **Module organization** is OPEN (ADR-ARCH-03). Until the owner decides,
@@ -179,15 +182,15 @@ Implemented tables are marked ✅; everything else is planned.
 | `portfolios` ✅ | user (immutable) | P2A | `owner_user_id` FK→users (RESTRICT), `name`, `base_currency`, `status` CHECK `ACTIVE`/`ARCHIVED`, timestamps |
 | `instruments` ✅ | user | P2B | `asset_class` CHECK (STOCK/ETF/MUTUAL_FUND), `name`, optional non-unique `symbol`/`isin`/`exchange`, fixed `quote_currency`; metadata column deferred |
 | `cash_accounts` ✅ | portfolio | P2B | `portfolio_id` FK (RESTRICT), `name`, fixed `currency`; many per portfolio |
-| `transactions` | portfolio | P3/P4 | type, transaction date, `sort_order`, fees/taxes, references to instrument/cash accounts |
-| `position_movements` | transaction | P3/P4 | quantity changes per instrument (source of holdings and FIFO lots) |
-| `cash_movements` | transaction | P3/P4 | amount changes per cash account (source of balances) |
+| `transactions` ✅ | portfolio | P3 | `kind`, `trade_date`, `sort_order`, optional instrument/cash account, decimal-text inputs, `note`; P4 adds kinds |
+| `position_movements` ✅ | transaction | P3 | `ACQUIRE`/`DISPOSE`, positive quantity, cost or net proceeds (source of holdings and FIFO lots) |
+| `cash_movements` ✅ | transaction | P3 | signed `amount_delta` per cash account (source of balances) |
 | `instrument_prices` | via instrument | P5 | date, price, source |
 | `fx_rates` | user | P5 | date, base/quote pair, rate, direction explicit |
 | import records | user/portfolio | P6 | upload, mapping, row results, audit |
 
-The ledger entities above are a **conceptual baseline**. Their physical
-schema is OPEN (ADR-LEDG-02) and must be approved at the start of P3.
+The ledger's physical schema was implemented in P3 as **Proposed**
+(ADR-LEDG-02) and awaits owner confirmation.
 Ownership chain: user → portfolio → (cash accounts, transactions →
 movements). Instruments, prices and FX rates are user-scoped.
 
@@ -274,9 +277,12 @@ ADR-NUM-01 … NUM-05:
 - **Rounding:** input precision is preserved. There is no arbitrary
   intermediate rounding; rounding happens only at defined boundaries, and
   overflow is checked.
-- **OPEN:** precision limits per kind, currency minor units, and
-  per-operation rounding modes. Decide before P2B (limits) and P3/P4
-  (rounding).
+- **P3 (Proposed, implemented provisionally):** inputs have at most 8
+  decimals and 15 integer digits (ADR-NUM-04). Trade amounts and FIFO
+  totals are exact, and a result that cannot be represented exactly is
+  rejected. Partial-lot cost is rounded half-to-even to 10 places, and the
+  lot keeps the exact remainder (ADR-NUM-05).
+- **OPEN:** currency minor units, and rounding for P4/P5 operations.
 
 ## 11. Market Data and FX
 
@@ -383,9 +389,9 @@ ADR-API-01 … API-06:
 | **P1** | Authentication & Session Management | ✅ Completed (`10a35ac`, CI green) |
 | **P1.1** | Authentication Security Hardening | ✅ Completed (`8e646a1`, CI green) |
 | **P2A** | Portfolio CRUD & Ownership | ✅ Completed (`c5e812d`, CI green) |
-| **P2B** | Instruments & Cash Accounts | ✅ Completed (verified locally; record commit + CI on merge) |
-| **P3** | Transaction Ledger & FIFO | ⏳ Not started (next) |
-| **P4** | Financial Transactions & Corporate Actions | Not started |
+| **P2B** | Instruments & Cash Accounts | ✅ Completed (`04bb1b9`, CI green) |
+| **P3** | Transaction Ledger & FIFO | ✅ Completed (verified locally; record commit + CI on merge) |
+| **P4** | Financial Transactions & Corporate Actions | ⏳ Not started (next) |
 | **P5** | Valuation, FX & Asset Allocation | Not started |
 | **P6** | CSV Import & Export | Not started |
 
@@ -408,7 +414,7 @@ flowchart LR
 | --- | --- | --- |
 | P2A ✅ | P1.1 | Done; provisional choices await confirmation (ADR-API-04, ADR-PORT-03, ADR-PORT-05) |
 | P2B ✅ | P2A | Done; provisional choices await confirmation (ADR-INST-04, ADR-PORT-04, ADR-INST-02) |
-| P3 | P2B | ADR-LEDG-02 physical schema, ADR-LEDG-08 `sort_order`, ADR-NUM-05 rounding (for trades) |
+| P3 ✅ | P2B | Done; provisional choices await confirmation (ADR-LEDG-02, LEDG-07, LEDG-08, NUM-04, NUM-05) |
 | P4 | P3 | ADR-TXN-01 Tax Return, ADR-TXN-04 fee placement, ADR-TXN-07 corporate-action allocation |
 | P5 | P3, P4 | ADR-VAL-02 staleness threshold |
 | P6 | P3, P4, P5 | ADR-CSV-02 staging model |
@@ -567,9 +573,7 @@ P2A onward are *Proposed* until they are implemented.
   any decimal financial values.
 
 ### P2B — Instruments & Cash Accounts
-- **Status:** ✅ Completed. Verified locally: all four CI commands pass and
-  there are 150 tests in total. Record the commit and CI run here once it
-  is merged.
+- **Status:** ✅ Completed (`04bb1b9`, CI green; 150 tests).
 - **Objective:** the reference data the ledger needs.
 - **Dependencies:** P2A.
 - **Provisional decisions:** these were implemented with the most
@@ -578,8 +582,8 @@ P2A onward are *Proposed* until they are implemented.
   - ADR-PORT-04: deleting a portfolio also deletes its unused cash accounts
   - ADR-INST-02: the typed JSON metadata column is deferred until an
     asset-specific attribute is defined
-  - P2B has no decimal fields, so ADR-NUM-02/04 move to P3, and
-    `rust_decimal` is still not added.
+  - P2B has no decimal fields, so ADR-NUM-02/04 moved to P3, where
+    `rust_decimal` was added.
 - **Files:**
   - `src/instruments/{mod,repository,service}.rs`
   - `src/cash_accounts/{mod,repository,service}.rs`
@@ -663,38 +667,107 @@ P2A onward are *Proposed* until they are implemented.
   instrument metadata.
 
 ### P3 — Transaction Ledger & FIFO
-- **Status:** Not started.
+- **Status:** ✅ Completed. Verified locally: all four CI commands pass and
+  there are 213 tests in total. Record the commit and CI run here once it
+  is merged.
 - **Objective:** an authoritative ledger with FIFO cost basis.
-- **Dependencies:** P2B. Decisions ADR-LEDG-02, ADR-LEDG-08 and ADR-NUM-05
-  must be made first.
-- **Scope:**
-  - `transactions`, `position_movements` and `cash_movements`
-  - opening positions (multi-lot) and opening cash balance
-  - Buy and Sell with optional cash movement
-  - FIFO lot computation as a pure Rust domain module
-  - ordering by date and `sort_order`
-  - edit and delete with atomic replay and validation
-  - extending the portfolio delete check to the new tables
-- **Expected files:**
-  - `src/ledger/` with `fifo.rs` (pure, no SeaORM or Axum), `service.rs`
-    and `repository.rs`
-  - `src/http/transactions.rs`
-  - migrations and `tests/ledger.rs`
-- **Database:** foreign keys to portfolio, instrument and cash account use
-  `RESTRICT`, with indexes for replay order (`portfolio_id`, date,
-  `sort_order`).
-- **API (Proposed):** `/api/v1/portfolios/{id}/transactions` (list, create,
-  get, update, delete), with mutations rejected on `ARCHIVED` portfolios.
-- **Tests:**
-  - FIFO unit tests: partial lots, multiple lots, fees in cost basis, net
-    proceeds
-  - negative holdings rejected, including through a historical edit
-  - negative cash allowed
-  - atomic rollback when a movement write fails
-  - ordering ties
-  - cross-user and cross-portfolio references rejected
-  - decimal round-trip through the database without precision loss
-- **Excluded:** income, transfers, FX, corporate actions, valuation.
+- **Dependencies:** P2B.
+- **Provisional decisions:** the owner decisions due before P3 were still
+  open, so each was implemented with the most conservative option. They
+  are marked **Proposed** and **still need owner confirmation**:
+  - ADR-LEDG-02: the physical schema below
+  - ADR-LEDG-07: each `OPENING_POSITION` opens exactly one lot (several
+    lots are several transactions)
+  - ADR-LEDG-08: `sort_order` is an integer (default 0) that orders
+    transactions within a day; ties fall back to entry order (UUIDv7)
+  - ADR-NUM-04: at most 8 decimals and 15 integer digits; strict grammar;
+    JSON numbers rejected
+  - ADR-NUM-05: partial-lot cost rounded half-to-even to 10 places with an
+    exact remainder; everything else exact, and unrepresentable results
+    rejected (`422`)
+  - net sale proceeds may be negative (fees above the gross value) and are
+    a realized loss
+  - a trade's cash account must use the instrument's quote currency (no
+    FX until P4)
+- **Files:**
+  - `src/ledger/decimal.rs`: `Quantity`, `Price`, `Amount`,
+    `SignedAmount`, strict parsing, and exact `exact_mul`/`exact_add`/
+    `exact_sub` on the mantissa
+  - `src/ledger/fifo.rs`: pure FIFO replay (no SeaORM or Axum)
+  - `src/ledger/transaction.rs`: kinds, per-kind validation, movement
+    effects
+  - `src/ledger/{repository,service}.rs`
+  - `src/http/transactions.rs`; `ApiError::InsufficientHoldings`
+  - migration `m20261024_000006_create_ledger`; entities `transaction`,
+    `position_movement`, `cash_movement`
+  - `portfolios::repository::{owned_portfolio, lock_active}` shared with
+    cash accounts
+  - `tests/{ledger,transactions_api,fifo_spec}.rs`; `Req::put` in the
+    harness
+- **Database:**
+  - **`transactions`:** the user's input (`kind`, `trade_date`,
+    `sort_order`, nullable `instrument_id`/`cash_account_id`, decimal-text
+    `quantity`/`price`/`fee`/`tax`/`amount`, `note` ≤500, timestamps).
+    Index `(portfolio_id, trade_date, sort_order, id)`.
+  - **`position_movements`** and **`cash_movements`:** the authoritative
+    effects, rewritten on every change.
+  - Every FK is immediate `ON DELETE RESTRICT`. `kind` columns have no
+    `CHECK`, so P4 can add kinds; Rust validates them.
+- **API (implemented):**
+
+  | Method & path | Purpose | Returns |
+  | --- | --- | --- |
+  | `POST /api/v1/portfolios/{id}/transactions` | record | 201 + `Location` / 400 / 404 / 409 `portfolio_archived` or `insufficient_holdings` / 415 / 422 |
+  | `GET /api/v1/portfolios/{id}/transactions?limit&offset&instrument_id` | list in ledger order | 200 / 400 / 404 / 422 |
+  | `GET /api/v1/portfolios/{id}/transactions/{transaction_id}` | get | 200 / 404 |
+  | `PUT /api/v1/portfolios/{id}/transactions/{transaction_id}` | replace (kind may change) | 200 / 400 / 404 / 409 / 415 / 422 |
+  | `DELETE /api/v1/portfolios/{id}/transactions/{transaction_id}` | delete | 204 / 404 / 409 |
+
+- **Write safety:** each write is one DB transaction that starts by
+  locking the owned, `ACTIVE` portfolio (ADR-DB-09), checks references,
+  rewrites the movements, replays FIFO from full history for every
+  affected instrument, then commits (ADR-LEDG-09). Portfolio delete checks
+  the ledger explicitly; instruments and cash accounts with history are
+  protected by `RESTRICT`.
+- **AGY usage** (all output reviewed critically; every result below was
+  actually run):
+  - schema and design review before coding (`--mode plan`, medium
+    effort); accepted: drop `created_at` from ordering
+  - an independent FIFO spec suite with hand-derived values
+    (`tests/fifo_spec.rs`, high effort, isolated worktree)
+  - the HTTP contract suite (`tests/transactions_api.rs`, high effort,
+    isolated worktree)
+  - a final read-only review (high effort). Accepted: checked FIFO totals,
+    exact trade arithmetic (a probe confirmed `rust_decimal` rounds
+    silently), control characters in notes, OpenAPI patterns and 409
+    descriptions, the `cash_movement` relation, FK race mapping, and extra
+    PUT/overflow tests. Not done: a `(portfolio_id, cash_account_id)`
+    index (redundant); P4 lot-adjusting FIFO events (documented only).
+- **Tests:** 15 ledger invariant tests, 11 HTTP contract tests, 11 FIFO
+  spec tests, plus unit tests for decimals, validation and FIFO.
+  - exact movements for trades; optional cash; signed opening cash
+  - decimals round-trip as text, digit for digit
+  - overselling, including at a historical point, after an edit, after a
+    delete, or after moving a trade to another instrument, is rejected
+    with nothing written
+  - `sort_order` and same-day ordering; opening lots join FIFO by date
+  - PUT changing the kind reposts the movements; foreign references are
+    rejected
+  - unrepresentable totals give `422`
+  - concurrent sales cannot oversell (multi-thread test, repeated 10×)
+  - history blocks deleting a portfolio, instrument or cash account
+  - cross-user isolation, CSRF and session requirements, archived
+    portfolios, unknown fields and JSON numbers
+- **Evidence:**
+  - **Mutation checks:** disabling replay fails 8 ledger tests; breaking
+    the remainder fails 3 unit and 6 FIFO spec tests.
+  - **Stress:** 20 concurrent sells of 3 against a holding of 10, over 3
+    rounds on a real server with a file database and a pool of 5: exactly
+    3 accepted and 17 refused each round, no `500`s.
+  - **Upgrade:** a P2B database migrates to migration 6 and its data still
+    works. Docker Compose persists data across a restart.
+- **Excluded:** income, transfers, FX, corporate actions (P4), valuation
+  (P5).
 
 ### P4 — Financial Transactions & Corporate Actions
 - **Status:** Not started.
@@ -809,11 +882,11 @@ P2A onward are *Proposed* until they are implemented.
   - [x] Currency is validated.
   - [x] Duplicate instrument identities are allowed.
 - **P3:**
-  - [ ] Holdings and cash are derived, never stored authoritatively.
-  - [ ] FIFO is correct.
-  - [ ] Invalid negative holdings are impossible, including through edits.
-  - [ ] All ledger writes are atomic.
-  - [ ] Decimals are exact end to end.
+  - [x] Holdings and cash are derived, never stored authoritatively.
+  - [x] FIFO is correct.
+  - [x] Invalid negative holdings are impossible, including through edits.
+  - [x] All ledger writes are atomic.
+  - [x] Decimals are exact end to end.
 - **P4:**
   - [ ] Every MVP transaction type posts correct movements.
   - [ ] Corporate-action cost rules hold.
@@ -843,7 +916,7 @@ The strategy is risk-based testing with incremental development (ADR-QA-01).
 | OpenAPI | Assert paths, schemas, security schemes exist | `tests/http.rs` |
 | Migrations | Fresh-DB apply; constraint behaviour | `tests/database.rs` |
 
-Current suite after P2B: **150 tests** (57 unit + 93 integration). All pass.
+Current suite after P3: **213 tests** (83 unit + 130 integration). All pass.
 
 Commands:
 
@@ -914,11 +987,18 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
 6. **ADR-INST-04:** confirm that bank deposits, including fixed-term ones,
    are plain cash accounts. *Implemented provisionally.* Also confirm
    deferring the instrument metadata column (ADR-INST-02).
-7. **ADR-NUM-02/04:** decimal column storage, and precision limits per
-   numeric kind and currency minor units. *Needed for P3.*
-8. **ADR-LEDG-02:** the physical ledger schema.
-9. **ADR-LEDG-08:** `sort_order` semantics.
-10. **ADR-NUM-05:** rounding mode and scale for each operation.
+7. **ADR-NUM-02/04:** confirm decimal TEXT storage and the limits (8
+   decimals, 15 integer digits, strict grammar). Currency minor units are
+   still open. *Implemented provisionally.*
+8. **ADR-LEDG-02:** confirm the physical ledger schema. *Implemented
+   provisionally.* Also confirm one lot per `OPENING_POSITION`
+   (ADR-LEDG-07), negative net sale proceeds, and requiring the cash
+   account to use the instrument's currency.
+9. **ADR-LEDG-08:** confirm `sort_order` semantics. *Implemented
+   provisionally.*
+10. **ADR-NUM-05:** confirm FIFO allocation rounding (half-to-even, 10
+    places) and rejecting unrepresentable results. *Implemented
+    provisionally.* Rounding for P4/P5 operations is still open.
 11. **ADR-TXN-01:** modelling of Tax Return.
 12. **ADR-TXN-04:** fee placement for transfers and FX exchanges.
 13. **ADR-TXN-07:** stock-dividend and cash-in-lieu allocation and rounding.
@@ -930,8 +1010,8 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
 
 ## 23. Current Implementation Status
 
-Verified against the source and the tests. P0–P2A are also verified
-against GitHub Actions (commit `c5e812d`). P2B is verified locally, and its
+Verified against the source and the tests. P0–P2B are also verified
+against GitHub Actions (commit `04bb1b9`). P3 is verified locally, and its
 commit and CI run are pending.
 
 | Area | Status | Evidence |
@@ -944,55 +1024,44 @@ commit and CI run are pending.
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 150 passing | `cargo test --locked` (local) |
+| Tests | ✅ 213 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
-| Ledger, FIFO (P3) | ❌ Not started | — |
+| Ledger, FIFO (P3) | ✅ Done (provisional decisions) | migration `m20261024_000006`; `src/ledger/`; `src/http/transactions.rs`; `tests/{ledger,transactions_api,fifo_spec}.rs` |
 | Financial transactions (P4) | ❌ Not started | — |
 | Valuation, FX (P5) | ❌ Not started | — |
 | CSV (P6) | ❌ Not started | — |
-| `rust_decimal` | ❌ Not added | not in `Cargo.toml` |
+| `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Account recovery, session cleanup | ❌ Not started | ADR-AUTH-10/11 open |
 
 ## 24. Next Recommended Task
 
-**P3 — Transaction Ledger & FIFO.** This is the first phase with financial
-values, so it carries the most risk.
+**P4 — Financial Transactions & Corporate Actions.**
 
-Prerequisites. These are owner decisions, and P3 code must not start
+Prerequisites. These are owner decisions, and P4 code must not start
 without them:
 
-1. **ADR-LEDG-02:** the physical ledger schema (`transactions`,
-   `position_movements`, `cash_movements`). Propose it at the start of P3
-   and get it approved before writing migrations.
-2. **ADR-NUM-02/04:** decimal storage (canonical TEXT) and precision limits
-   for quantity, price and money. Verify SeaORM's SQLite mapping of
-   `Decimal` before choosing column types.
-3. **ADR-LEDG-08:** `sort_order` semantics.
-4. **ADR-NUM-05:** rounding for trade amounts and FIFO lot cost.
-5. Confirmation of the P2A/P2B provisional choices (§22: questions 2–6).
-6. Start from a clean `main` with P2B committed and CI green. Then record
-   the P2B commit in §15, §17 and §23.
+1. **ADR-TXN-01:** how a Tax Return is modelled.
+2. **ADR-TXN-04:** fee placement for cash transfers and FX exchanges.
+3. **ADR-TXN-07:** stock-dividend and cash-in-lieu allocation and
+   rounding.
+4. Rounding for the new P4 operations (ADR-NUM-05).
+5. Confirmation of the P3 provisional choices (§22: questions 7–10), and
+   the earlier P2A/P2B ones (questions 2–6).
+6. Start from a clean `main` with P3 committed and CI green. Then record
+   the P3 commit in §1, §15, §17 and §23.
 
 Implementation notes:
 
-- **Dependencies:** add `rust_decimal`. Money, quantity, price and rate get
-  distinct types (ADR-NUM-03), and decimals are serialized as JSON strings.
-- **FIFO:** a pure module with no SeaORM or Axum types, unit-tested
-  exhaustively.
-- **Foreign keys:** from ledger tables to portfolios, instruments and cash
-  accounts, all immediate `ON DELETE RESTRICT`. The existing delete paths
-  (`portfolio_has_history`, `instrument_in_use`, `cash_account_in_use`)
-  then work automatically. Extend `portfolios::service::delete` explicitly
-  for the new tables.
-- **Ownership:** every referenced instrument and cash account must belong
-  to the caller and to the same portfolio (ADR-OWN-03). Ledger mutations
-  are rejected on `ARCHIVED` portfolios, using the guarded-write pattern
-  from cash accounts.
-- **Atomicity:** each transaction and its movements are written in one
-  database transaction, followed by FIFO replay and validation
-  (ADR-LEDG-03/09).
+- **Schema:** additive only (ADR-LEDG-02). New kinds need no migration for
+  the `kind` columns; transfers and FX exchanges post two cash movements
+  and add nullable transaction columns through `ADD COLUMN`.
+- **FIFO:** splits, reverse splits and stock dividends adjust existing
+  lots, so `fifo::Event` needs lot-adjusting variants. Total cost is
+  preserved by splits; cash in lieu realizes P/L on the allocated cost.
+- **Arithmetic:** keep using `exact_*` from `ledger::decimal`. The only
+  rounding is at boundaries the owner has defined.
+- **Writes:** reuse `ledger::service::write` (lock first, then replay).
 
-Out of scope for P3: income, transfers, FX, corporate actions (P4), and
-valuation (P5).
+Out of scope for P4: valuation, prices and market FX (P5), and CSV (P6).

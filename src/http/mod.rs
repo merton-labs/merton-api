@@ -7,6 +7,7 @@ pub mod extract;
 mod health;
 mod instruments;
 mod portfolios;
+mod transactions;
 
 use axum::http::{HeaderValue, header};
 use axum::routing::{get, post};
@@ -46,6 +47,11 @@ use crate::app::AppState;
         cash_accounts::get,
         cash_accounts::update,
         cash_accounts::delete,
+        transactions::create,
+        transactions::list,
+        transactions::get,
+        transactions::replace,
+        transactions::delete,
     ),
     modifiers(&SessionCookieScheme),
     tags(
@@ -54,6 +60,7 @@ use crate::app::AppState;
         (name = "portfolios", description = "The current user's private portfolios. Other users' portfolios are reported as 404."),
         (name = "instruments", description = "The current user's instruments. Identity fields are optional and need not be unique."),
         (name = "cash-accounts", description = "Cash accounts inside a portfolio. Changes require an active portfolio."),
+        (name = "transactions", description = "The portfolio ledger. Decimal values are JSON strings; FIFO history is validated on every change."),
     ),
 )]
 pub struct ApiDoc;
@@ -96,6 +103,16 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{id}/cash-accounts",
             get(cash_accounts::list).post(cash_accounts::create),
+        )
+        .route(
+            "/{id}/transactions",
+            get(transactions::list).post(transactions::create),
+        )
+        .route(
+            "/{id}/transactions/{transaction_id}",
+            get(transactions::get)
+                .put(transactions::replace)
+                .delete(transactions::delete),
         )
         .route(
             "/{id}/cash-accounts/{account_id}",
