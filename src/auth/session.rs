@@ -12,6 +12,12 @@ pub const IDLE_TIMEOUT: Duration = Duration::days(7);
 pub const ABSOLUTE_TIMEOUT: Duration = Duration::days(30);
 /// Minimum time between activity writes for one session.
 pub const ACTIVITY_UPDATE_INTERVAL: Duration = Duration::minutes(15);
+/// How long an expired or revoked session row is kept before it is purged.
+///
+/// SQLite stores timestamps as RFC 3339 text and compares them as strings,
+/// which is exact only to the second. A grace of at least one second keeps
+/// that imprecision from ever deleting a session that is still active.
+pub const PURGE_GRACE: Duration = Duration::days(1);
 
 const TOKEN_BYTES: usize = 32;
 

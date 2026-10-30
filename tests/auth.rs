@@ -4,10 +4,12 @@ mod common;
 
 use axum::http::{StatusCode, header};
 use common::{ORIGIN, PASSWORD, Req, SESSION_COOKIE, TestApp, TestResponse, security_config};
-use merton_api::auth::session::hash_presented_token;
+use merton_api::auth::service;
+use merton_api::auth::session::{PURGE_GRACE, hash_presented_token};
 use merton_api::infrastructure::entities::{user, user_session};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, SqlErr};
 use serde_json::json;
+use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
@@ -894,4 +896,81 @@ async fn registration_attempts_share_the_client_budget() {
     let login = app.login("valid@example.com", PASSWORD).await;
     login.assert_problem(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
     assert_eq!(app.state.security.hash_limiter.available(), 4);
+}
+
+async fn session_exists(app: &TestApp, token: &str) -> bool {
+    user_session::Entity::find()
+        .filter(user_session::Column::TokenHash.eq(hash_presented_token(token).unwrap()))
+        .one(app.db())
+        .await
+        .unwrap()
+        .is_some()
+}
+
+#[tokio::test]
+async fn purge_deletes_only_sessions_ended_beyond_the_grace_period() {
+    let app = TestApp::new().await;
+    let now = OffsetDateTime::now_utc();
+    let long_ago = now - PURGE_GRACE - Duration::minutes(1);
+    let recently = now - Duration::hours(1);
+
+    let active = app.signed_in("active@example.com").await;
+    let revoked_long_ago = app.signed_in("revoked-old@example.com").await;
+    update_session(&app, &revoked_long_ago, |s| {
+        s.revoked_at = Set(Some(long_ago))
+    })
+    .await;
+    let revoked_recently = app.signed_in("revoked-new@example.com").await;
+    update_session(&app, &revoked_recently, |s| {
+        s.revoked_at = Set(Some(recently))
+    })
+    .await;
+    let idle_long_ago = app.signed_in("idle-old@example.com").await;
+    update_session(&app, &idle_long_ago, |s| s.idle_expires_at = Set(long_ago)).await;
+    let idle_recently = app.signed_in("idle-new@example.com").await;
+    update_session(&app, &idle_recently, |s| s.idle_expires_at = Set(recently)).await;
+    let absolute_long_ago = app.signed_in("absolute-old@example.com").await;
+    update_session(&app, &absolute_long_ago, |s| {
+        s.idle_expires_at = Set(now + Duration::days(7));
+        s.absolute_expires_at = Set(long_ago);
+    })
+    .await;
+
+    let deleted = service::purge_ended_sessions(app.db(), now).await.unwrap();
+
+    assert_eq!(deleted, 3);
+    for gone in [&revoked_long_ago, &idle_long_ago, &absolute_long_ago] {
+        assert!(!session_exists(&app, gone).await);
+    }
+    for kept in [&active, &revoked_recently, &idle_recently] {
+        assert!(session_exists(&app, kept).await);
+    }
+    assert_eq!(app.me(&active).await.status, StatusCode::OK);
+    app.me(&revoked_recently)
+        .await
+        .assert_problem(StatusCode::UNAUTHORIZED, "unauthenticated");
+    assert_eq!(
+        service::purge_ended_sessions(app.db(), now).await.unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn purge_keeps_a_session_that_ended_exactly_at_the_cutoff() {
+    let app = TestApp::new().await;
+    let now = datetime!(2026-06-01 12:00:00.5 UTC);
+    let cutoff = now - PURGE_GRACE;
+    let at_cutoff = app.signed_in("at-cutoff@example.com").await;
+    update_session(&app, &at_cutoff, |s| s.idle_expires_at = Set(cutoff)).await;
+    let before_cutoff = app.signed_in("before-cutoff@example.com").await;
+    update_session(&app, &before_cutoff, |s| {
+        s.idle_expires_at = Set(cutoff - Duration::seconds(1));
+    })
+    .await;
+
+    let deleted = service::purge_ended_sessions(app.db(), now).await.unwrap();
+
+    assert_eq!(deleted, 1);
+    assert!(session_exists(&app, &at_cutoff).await);
+    assert!(!session_exists(&app, &before_cutoff).await);
 }

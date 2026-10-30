@@ -1,7 +1,9 @@
 //! Database access for users and sessions.
 
 use sea_orm::sea_query::Expr;
-use sea_orm::{ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, QueryFilter,
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -95,6 +97,23 @@ pub async fn record_session_activity(
         .exec(db)
         .await?;
     Ok(())
+}
+
+/// Deletes every session, of any user, that was revoked or expired before
+/// `cutoff`. Returns the number of rows deleted.
+pub async fn delete_sessions_ended_before(
+    db: &impl ConnectionTrait,
+    cutoff: OffsetDateTime,
+) -> Result<u64, DbErr> {
+    let ended = Condition::any()
+        .add(user_session::Column::RevokedAt.lt(cutoff))
+        .add(user_session::Column::IdleExpiresAt.lt(cutoff))
+        .add(user_session::Column::AbsoluteExpiresAt.lt(cutoff));
+    let result = user_session::Entity::delete_many()
+        .filter(ended)
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected)
 }
 
 pub async fn revoke_session(

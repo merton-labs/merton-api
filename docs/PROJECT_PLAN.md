@@ -33,11 +33,11 @@ separate repository.
 | P0 (foundation) | Completed |
 | P1 (authentication) | Completed |
 | P1.1 (auth hardening) | Completed |
-| P2A (portfolios) | Completed (`c5e812d`, CI green; some decisions provisional) |
-| P2B (instruments, cash accounts) | Completed (`04bb1b9`, CI green; some decisions provisional) |
-| P3 (ledger, FIFO) | Completed (`fc538e1`, CI green; decisions provisional, see §17) |
-| P4 (financial transactions, corporate actions) | Completed (PR #1, merge `725023d`, CI green (run 41078791140); some rules provisional, see §17) |
-| P5 (valuation, FX, allocation) | Completed: storage in PR #1; holdings, valuation and allocation in a second pull request |
+| P2A (portfolios) | Completed (`c5e812d`, CI green; decisions confirmed 2026-10-31) |
+| P2B (instruments, cash accounts) | Completed (`04bb1b9`, CI green; one decision provisional, ADR-INST-02) |
+| P3 (ledger, FIFO) | Completed (`fc538e1`, CI green; decisions confirmed 2026-10-31 except two details, see §22) |
+| P4 (financial transactions, corporate actions) | Completed (PR #1, merge `725023d`, CI green (run 41078791140); two corporate-action rules provisional, see §22) |
+| P5 (valuation, FX, allocation) | Completed: storage in PR #1; holdings, valuation and allocation in PR #2, merge `67c3d1d`, CI green (run 41083764335) |
 
 ## 2. Product Goals
 
@@ -191,8 +191,8 @@ Implemented tables are marked ✅; everything else is planned.
 | `fx_rates` ✅ | user | P5 | `base_currency`, `quote_currency`, `rate_date`, decimal-text `rate` (1 base = rate quote), `source`; unique per owner, pair and date |
 | import records | user/portfolio | P6 | upload, mapping, row results, audit |
 
-The ledger's physical schema was implemented in P3 as **Proposed**
-(ADR-LEDG-02) and awaits owner confirmation.
+The ledger's physical schema (ADR-LEDG-02) was implemented in P3 and P4;
+the owner confirmed it on 2026-10-31.
 Ownership chain: user → portfolio → (cash accounts, transactions →
 movements). Instruments, prices and FX rates are user-scoped.
 
@@ -226,8 +226,8 @@ movements). Instruments, prices and FX rates are user-scoped.
    one.
 5. Each phase adds cross-user integration tests.
 
-**Not implemented:** account recovery (ADR-AUTH-10) and session cleanup
-(ADR-AUTH-11).
+**Not in the MVP:** account recovery (ADR-AUTH-10, owner 2026-10-31).
+Ended sessions are purged a day after they end (ADR-AUTH-11).
 
 ## 9. Financial Ledger Rules
 
@@ -261,9 +261,9 @@ Summary of ADR-LEDG-01 … LEDG-10 and ADR-TXN-01 … TXN-07:
   - stock dividends spread cost basis across the resulting lots
   - splits preserve total cost
   - cash in lieu realizes P/L on the allocated fractional cost
-  - P4 rules (ADR-TXN-07, Proposed): proportional lot adjustment, holdings
-    rounded to 8 places with the residual in the last lot, and cash in
-    lieu disposed of through FIFO
+  - P4 rules (ADR-TXN-07): proportional lot adjustment, and holdings
+    rounded to 8 places with the residual in the last lot (Accepted);
+    cash in lieu disposed of through FIFO (Proposed)
 
 ## 10. Financial Precision and Rounding
 
@@ -281,12 +281,12 @@ ADR-NUM-01 … NUM-05:
 - **Rounding:** input precision is preserved. There is no arbitrary
   intermediate rounding; rounding happens only at defined boundaries, and
   overflow is checked.
-- **P3 (Proposed, implemented provisionally):** inputs have at most 8
+- **P3 (Accepted 2026-10-31, except as noted):** inputs have at most 8
   decimals and 15 integer digits (ADR-NUM-04). Trade amounts and FIFO
   totals are exact, and a result that cannot be represented exactly is
-  rejected. Partial-lot cost is rounded half-to-even to 10 places, and the
+  rejected (still Proposed). Partial-lot cost is rounded half-to-even to 10 places, and the
   lot keeps the exact remainder (ADR-NUM-05).
-- **P4 (Proposed):** cash, transfer and FX postings are exact. Splits and
+- **P4 (Accepted, owner 2026-10-31):** cash, transfer and FX postings are exact. Splits and
   stock dividends round holdings half-to-even to 8 places, with the
   residual in the last lot; cost is never rounded.
 - **P5 (Accepted, owner 2026-10-30):** valuation is exact until the end;
@@ -383,7 +383,7 @@ ADR-API-01 … API-06:
 
 - **Pagination:**
   - `limit` and `offset`, with a stable order and a unique tie-breaker.
-  - Page-size limits are OPEN; proposed default 50, max 200.
+  - Page size: default 50, max 200 (ADR-API-04, owner 2026-10-31).
 - **Request rules:**
   - Decimals are JSON strings.
   - Request bodies never carry an owner identity.
@@ -402,7 +402,7 @@ ADR-API-01 … API-06:
 | **P2B** | Instruments & Cash Accounts | ✅ Completed (`04bb1b9`, CI green) |
 | **P3** | Transaction Ledger & FIFO | ✅ Completed (`fc538e1`, CI green) |
 | **P4** | Financial Transactions & Corporate Actions | ✅ Completed (PR #1, merge `725023d`, CI green (run 41078791140)) |
-| **P5** | Valuation, FX & Asset Allocation | ✅ Completed (step 1 in PR #1; step 2 in a second pull request) |
+| **P5** | Valuation, FX & Asset Allocation | ✅ Completed (step 1 in PR #1; step 2 in PR #2) |
 | **P6** | CSV Import & Export | Deferred (owner, 2026-10-30) |
 
 Phases are implemented in order. Do not merge phases, and do not pull
@@ -422,10 +422,10 @@ flowchart LR
 
 | Phase | Hard prerequisites | Decisions needed before starting |
 | --- | --- | --- |
-| P2A ✅ | P1.1 | Done; provisional choices await confirmation (ADR-API-04, ADR-PORT-03, ADR-PORT-05) |
-| P2B ✅ | P2A | Done; provisional choices await confirmation (ADR-INST-04, ADR-PORT-04, ADR-INST-02) |
-| P3 ✅ | P2B | Done; provisional choices await confirmation (ADR-LEDG-02, LEDG-07, LEDG-08, NUM-04, NUM-05) |
-| P4 ✅ | P3 | Done; provisional choices await confirmation (ADR-LEDG-02 schema, ADR-TXN-07 rules, ADR-NUM-05 P4 rounding) |
+| P2A ✅ | P1.1 | Done; decisions confirmed 2026-10-31 |
+| P2B ✅ | P2A | Done; confirmed 2026-10-31 except deferring the metadata column (ADR-INST-02) |
+| P3 ✅ | P2B | Done; confirmed 2026-10-31 except the decimal grammar and sign rules (ADR-NUM-04) and rejecting unrepresentable results (ADR-NUM-05) |
+| P4 ✅ | P3 | Done; confirmed 2026-10-31 except ADR-TXN-07 rules 5–6 |
 | P5 ✅ | P3, P4 | Done (ADR-VAL-07 accepted 2026-10-30) |
 | P6 | P3, P4, P5 | ADR-CSV-02 staging model |
 
@@ -508,12 +508,12 @@ P2A onward are *Proposed* until they are implemented.
   establishes the owner-scoping pattern every later feature reuses.
 - **Dependencies:** P1.1.
 - **Provisional decisions:** these were implemented with the most
-  conservative option and **still need owner confirmation**:
+  conservative option; the owner confirmed them on 2026-10-31:
   - ADR-API-04: page size 50, maximum 200
   - ADR-PORT-03: archived portfolios cannot be updated
   - ADR-PORT-05: the currency code's format is checked, not the ISO list
-  - The module layout followed the current hybrid default (ADR-ARCH-03 is
-    still Open).
+  - The module layout followed the current hybrid default (ADR-ARCH-03,
+    kept by the owner).
 - **Files:**
   - `src/portfolios/mod.rs`: domain types (`PortfolioName`, `CurrencyCode`,
     `PortfolioStatus`, `Page`, `PortfolioError`)
@@ -587,7 +587,8 @@ P2A onward are *Proposed* until they are implemented.
 - **Objective:** the reference data the ledger needs.
 - **Dependencies:** P2A.
 - **Provisional decisions:** these were implemented with the most
-  conservative option and **still need owner confirmation**:
+  conservative option. The owner confirmed the first two on 2026-10-31;
+  the third still needs confirmation:
   - ADR-INST-04: bank deposits are plain cash accounts
   - ADR-PORT-04: deleting a portfolio also deletes its unused cash accounts
   - ADR-INST-02: the typed JSON metadata column is deferred until an
@@ -683,7 +684,8 @@ P2A onward are *Proposed* until they are implemented.
 - **Dependencies:** P2B.
 - **Provisional decisions:** the owner decisions due before P3 were still
   open, so each was implemented with the most conservative option. They
-  are marked **Proposed** and **still need owner confirmation**:
+  were marked **Proposed**; the owner confirmed them on 2026-10-31, except the
+  details still listed in §22:
   - ADR-LEDG-02: the physical schema below
   - ADR-LEDG-07: each `OPENING_POSITION` opens exactly one lot (several
     lots are several transactions)
@@ -809,11 +811,10 @@ P2A onward are *Proposed* until they are implemented.
     lieu (ADR-TXN-06/07)
   - lot-adjusting FIFO events and `no_holdings` (`409`)
   - migration `m20261030_000008_add_exchange_and_corporate_actions`
-- **Provisional (Proposed, awaiting owner review):**
-  - the schema additions (ADR-LEDG-02)
-  - the corporate-action rules chosen under the owner's delegation
-    (ADR-TXN-07, ADR-NUM-05). The owner could not judge them on
-    2026-10-30, so they stay Proposed.
+- **Provisional decisions:** the schema additions (ADR-LEDG-02) and the
+  corporate-action rules chosen under the owner's delegation (ADR-TXN-07,
+  ADR-NUM-05). The owner confirmed them on 2026-10-31, except ADR-TXN-07 rules
+  5–6 (§22, question 13).
 - **Files:**
   - `src/ledger/decimal.rs`: `Ratio`, exact `div_round`
   - `src/ledger/fifo.rs`: `Split` and `StockDividend` events, proportional
@@ -882,8 +883,7 @@ P2A onward are *Proposed* until they are implemented.
 ### P5 — Valuation, FX & Asset Allocation
 - **Status:** ✅ Completed.
   - **Step 1, price and FX-rate storage:** merged (PR #1, merge `725023d`, CI green (run 41078791140)).
-  - **Step 2, holdings, valuation and allocation:** verified locally (all
-    four CI commands, 288 tests), committed and in a pull request.
+  - **Step 2, holdings, valuation and allocation:** merged (PR #2, merge `67c3d1d`, CI green (run 41083764335)).
 - **Objective:** on-demand portfolio valuation in the base currency.
 - **Dependencies:** P3 and P4. Owner decisions (2026-10-30):
   - ADR-VAL-02: a price is stale after 7 days, an FX rate after 3.
@@ -1063,7 +1063,7 @@ The strategy is risk-based testing with incremental development (ADR-QA-01).
 | OpenAPI | Assert paths, schemas, security schemes exist | `tests/http.rs` |
 | Migrations | Fresh-DB apply; constraint behaviour | `tests/database.rs` |
 
-Current suite after P5: **288 tests** (114 unit + 174 integration). All pass.
+Current suite after the session purge: **290 tests** (114 unit + 176 integration). All pass.
 
 Commands:
 
@@ -1101,8 +1101,8 @@ tests, and `unsafe_code` is forbidden.
 
 | Risk | Status / mitigation |
 | --- | --- |
-| No account recovery | OPEN (ADR-AUTH-10); operators must manage accounts in the DB |
-| Expired/revoked sessions accumulate | OPEN (ADR-AUTH-11) |
+| No account recovery | Accepted for the MVP (ADR-AUTH-10, owner 2026-10-31); operators manage accounts in the DB |
+| Expired/revoked sessions accumulate | Mitigated: rows are deleted one day after they end, at startup and then hourly (ADR-AUTH-11) |
 | Rate limits are process-local, reset on restart, fixed-window (up to 2× burst at boundaries) | Accepted for single-instance MVP |
 | Successful login clears in-flight failure slots; reveals owner sign-in to an attacker with recorded failures | Accepted residual (low) |
 | Key-table flood (10,000 keys all exhausted) can evict an exhausted entry | Accepted residual (lowest-count eviction first) |
@@ -1121,49 +1121,62 @@ tests, and `unsafe_code` is forbidden.
 These need project-owner decisions. Do not resolve them silently in code;
 the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-decisions-summary).
 
-1. **ADR-ARCH-03:** feature-first vs layer-first, or keep the current
-   hybrid? P2A followed the hybrid.
-2. **ADR-API-04:** confirm page size 50 / 200. *Implemented
-   provisionally.*
-3. **ADR-PORT-03:** confirm that archived portfolios cannot be renamed or
-   have their base currency changed. *Implemented provisionally (409).*
-4. **ADR-PORT-04:** confirm that an unused cash account is not history and
-   is deleted together with its portfolio. *Implemented provisionally.*
-5. **ADR-PORT-05:** confirm format-only base-currency validation, rather
-   than the ISO 4217 list. *Implemented provisionally.*
-6. **ADR-INST-04:** confirm that bank deposits, including fixed-term ones,
-   are plain cash accounts. *Implemented provisionally.* Also confirm
-   deferring the instrument metadata column (ADR-INST-02).
-7. **ADR-NUM-02/04:** confirm decimal TEXT storage and the limits (8
-   decimals, 15 integer digits, strict grammar). Currency minor units are
-   still open. *Implemented provisionally.*
-8. **ADR-LEDG-02:** confirm the physical ledger schema. *Implemented
-   provisionally.* Also confirm one lot per `OPENING_POSITION`
-   (ADR-LEDG-07), negative net sale proceeds, and requiring the cash
-   account to use the instrument's currency.
-9. **ADR-LEDG-08:** confirm `sort_order` semantics. *Implemented
-   provisionally.*
-10. **ADR-NUM-05:** confirm FIFO allocation rounding (half-to-even, 10
-    places) and rejecting unrepresentable results. *Implemented
-    provisionally.* P5 rounding was answered 2026-10-30; P4 rounding is
-    still Proposed.
+Questions 1–10 were confirmed by the owner on 2026-10-31, except the parts
+still open below.
+
+1. ~~**ADR-ARCH-03:** module organization.~~ Answered: keep the current
+   hybrid.
+2. ~~**ADR-API-04:** page size 50 / 200.~~ Confirmed.
+3. ~~**ADR-PORT-03:** archived portfolios cannot be updated.~~ Confirmed.
+4. ~~**ADR-PORT-04:** unused cash accounts are deleted with their
+   portfolio.~~ Confirmed.
+5. ~~**ADR-PORT-05:** format-only base-currency validation.~~ Confirmed.
+6. **ADR-INST-04:** bank deposits are plain cash accounts: confirmed.
+   *Still open:* deferring the instrument metadata column (ADR-INST-02).
+7. **ADR-NUM-04:** the limits (8 decimals, 15 integer digits) are
+   confirmed. *Still open:* the strict grammar and sign rules, and
+   currency minor units (ADR-NUM-02).
+8. ~~**ADR-LEDG-02/07:** the ledger schema through P4, and one lot per
+   `OPENING_POSITION`.~~ Confirmed.
+9. ~~**ADR-LEDG-08:** `sort_order` semantics.~~ Confirmed.
+10. **ADR-NUM-05:** FIFO allocation rounding (half-to-even, 10 places) and
+    the P4 rounding are confirmed. *Still open:* rejecting a result that
+    cannot be represented exactly, instead of rounding it.
 11. ~~**ADR-TXN-01:** modelling of Tax Return.~~ Answered 2026-10-30: a
     separate kind.
 12. ~~**ADR-TXN-04:** fee placement.~~ Answered 2026-10-30: follow
     Snowball Analytics, with the fee always in the source currency.
 13. **ADR-TXN-07:** answered 2026-10-30: follow Snowball, else the
-    implementer's choice. Still to review: the rules chosen (`new:old`
-    ratio, proportional lots, 8-place rounding with the residual in the
-    last lot, cash in lieu through FIFO). The owner could not judge them
-    on 2026-10-30; they stay Proposed.
+    implementer's choice. Rules 1–4 (`new:old` ratio, proportional lots,
+    8-place rounding with the residual in the last lot) were confirmed on
+    2026-10-31. *Still open:* rules 5–6, rejecting a split that rounds a
+    holding or lot to zero, and disposing of cash in lieu through FIFO.
 14. ~~**ADR-VAL-02:** price and FX staleness threshold.~~ Answered
     2026-10-30: stale after 7 days for prices and 3 days for FX rates.
 15. **ADR-CSV-02:** import staging model. *Deferred 2026-10-30:* the owner
     put P6 after the rest of the MVP. Recommendation on record: a
     server-side staging table, with rows expiring after 24 hours.
-16. **Performance:** limits for ledger replay on large portfolios.
-17. **ADR-AUTH-10 / AUTH-11:** account recovery and session cleanup, and
-    their timing before production use.
+16. ~~**Performance:** limits for ledger replay on large portfolios.~~
+    Answered 2026-10-31: no hard limit for the MVP.
+    *Measured 2026-10-31* (release build, file SQLite, one instrument, every
+    BUY a new lot, the worst case for replay; script kept outside the repo):
+
+    | Lots of one instrument | Write (any position change) | Valuation | Holdings | List page |
+    | --- | --- | --- | --- | --- |
+    | 1,000 | 12 ms | 6 ms | 5 ms | 2 ms |
+    | 2,500 | 29 ms | 15 ms | 14 ms | 3 ms |
+    | 5,000 | 55 ms | 29 ms | 26 ms | 3 ms |
+    | 10,000 | 111–114 ms | 51 ms | 105 ms | 4 ms |
+
+    - Cost grows linearly with that instrument's history. Writes dated
+      before every lot cost the same as appends. A SELL consuming 5,000
+      lots took 106 ms. 10,000 lots used 6.9 MB of database.
+    - A personal portfolio with monthly purchases for 30 years has about
+      360 lots per instrument, well under 1,000. Revisit (snapshots or
+      incremental replay) only if real use approaches 10,000.
+17. ~~**ADR-AUTH-10 / AUTH-11:** account recovery and session cleanup.~~
+    Answered 2026-10-31: no account recovery in the MVP; the session purge (one
+    day after a session ends, at startup and then hourly) is confirmed.
 18. ~~**P4 cash transactions:** confirm the provisional shapes.~~ Confirmed
     2026-10-30. The P4 schema (ADR-LEDG-02) is still Proposed.
 19. ~~**Dividends in another currency.**~~ Answered 2026-10-30: not
@@ -1182,9 +1195,11 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
 ## 23. Current Implementation Status
 
 Verified against the source and the tests. P0–P3 are also verified
-against GitHub Actions (P3: commit `fc538e1`). P4 and P5 step 1 are on
-`main` through PR #1, merge `725023d`, CI green (run 41078791140). P5 step 2 is committed and in a second pull request; record its CI run
-here once it is merged.
+against GitHub Actions (P3: commit `fc538e1`). P4 and P5 are on `main`
+through PR #1 (merge `725023d`, run 41078791140) and PR #2 (merge
+`67c3d1d`, run 41083764335), both CI green. The session purge
+(ADR-AUTH-11) and the owner's confirmations are in a third pull request;
+record its CI run here once it is merged.
 
 | Area | Status | Evidence |
 | --- | --- | --- |
@@ -1196,34 +1211,34 @@ here once it is merged.
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 288 passing | `cargo test --locked` (local) |
+| Tests | ✅ 290 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
-| Ledger, FIFO (P3) | ✅ Done (provisional decisions) | migration `m20261024_000006`; `src/ledger/`; `src/http/transactions.rs`; `tests/{ledger,transactions_api,fifo_spec}.rs` |
-| Financial transactions, corporate actions (P4) | ✅ Done (some rules provisional; PR #1) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
+| Ledger, FIFO (P3) | ✅ Done (two details provisional) | migration `m20261024_000006`; `src/ledger/`; `src/http/transactions.rs`; `tests/{ledger,transactions_api,fifo_spec}.rs` |
+| Financial transactions, corporate actions (P4) | ✅ Done (two rules provisional; PR #1) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
 | Prices, FX rates (P5 step 1) | ✅ Done (PR #1) | migration `m20261030_000009`; `src/market_data/`; `src/http/market_data.rs`; `tests/market_data.rs` |
-| Holdings, valuation, allocation (P5 step 2) | ✅ Done (committed; pull request open) | `src/valuation/`; `src/http/valuation.rs`; `tests/valuation.rs` |
+| Holdings, valuation, allocation (P5 step 2) | ✅ Done (PR #2) | `src/valuation/`; `src/http/valuation.rs`; `tests/valuation.rs` |
 | CSV (P6) | ❌ Not started | — |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
-| Account recovery, session cleanup | ❌ Not started | ADR-AUTH-10/11 open |
+| Session purge | ✅ Done (third pull request) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
+| Account recovery | ➖ Not in the MVP | ADR-AUTH-10 (owner, 2026-10-31) |
 
 ## 24. Next Recommended Task
 
-1. **Merge the P5 step 2 pull request**, then record its CI run in §1,
-   §15, §17 and §23.
+1. **Merge the third pull request** (session purge and the owner's
+   2026-10-31 confirmations), then record its CI run in §23.
 2. **The rest of the MVP, before P6** (the owner deferred CSV on
-   2026-10-30). Candidates; the order is the owner's call:
-   - **ADR-AUTH-11:** cleaning up expired sessions.
-   - **ADR-AUTH-10:** account recovery, for example an admin-run reset,
-     since there is no mail service.
-   - **Performance:** a limit or measurement for ledger replay on large
-     portfolios (§22, question 16).
-   - **Deployment:** a `docker compose up --build` smoke test on a
-     machine with Docker. It was not run for P4 or P5, because the
-     development machine has no Docker.
-   - **Confirmations:** the provisional choices in §22 (questions 1–10
-     and 13).
+   2026-10-30). Done on 2026-10-31: the session purge (ADR-AUTH-11), the
+   replay measurement (§22, question 16), the decision on account
+   recovery (none in the MVP), and most confirmations. Still to do:
+   - **Deployment:** the owner runs the `docker compose up --build` smoke
+     test on a machine with Docker. A CI job that builds the image and
+     calls `/api/v1/health` comes later, when the owner asks for it.
+   - **Confirmations still open** (§22): ADR-INST-02 (question 6),
+     ADR-NUM-04 grammar and sign rules (question 7), ADR-NUM-05 rejecting
+     unrepresentable results (question 10), ADR-TXN-07 rules 5–6
+     (question 13).
 3. **P6 — CSV Import & Export**, later. It still needs ADR-CSV-02, the
    staging model (§22, question 15).
 

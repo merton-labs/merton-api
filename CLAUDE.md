@@ -91,8 +91,8 @@ that was never approved.
    versions from `Cargo.lock` and the registry sources; do not guess.
 3. Check the decisions doc for anything Open that affects the task. Ask
    the owner rather than choosing yourself.
-4. Follow the existing module layout. Module organization is **Open**
-   (ADR-ARCH-03): do not reorganize without approval.
+4. Follow the existing hybrid module layout (ADR-ARCH-03, accepted by
+   the owner): do not reorganize without approval.
 
 ## Verify (all must pass; never claim a pass you did not run)
 

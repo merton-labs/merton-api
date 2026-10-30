@@ -1,8 +1,9 @@
-//! Authentication use cases: register, log in, authenticate, log out.
+//! Authentication use cases: register, log in, authenticate, log out, and
+//! purging ended sessions.
 
 use std::net::IpAddr;
 
-use sea_orm::{DatabaseConnection, SqlErr, TransactionTrait};
+use sea_orm::{DatabaseConnection, DbErr, SqlErr, TransactionTrait};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -235,6 +236,15 @@ pub async fn logout(db: &DatabaseConnection, session_id: Uuid) -> Result<(), Aut
     )
     .await?;
     Ok(())
+}
+
+/// Deletes sessions that ended (expired or were revoked) more than
+/// [`session::PURGE_GRACE`] before `now`. Returns the number deleted.
+pub async fn purge_ended_sessions(
+    db: &DatabaseConnection,
+    now: OffsetDateTime,
+) -> Result<u64, DbErr> {
+    repository::delete_sessions_ended_before(db, now - session::PURGE_GRACE).await
 }
 
 fn reserve_hash(hashes: &HashLimiter) -> Result<HashPermit, AuthError> {

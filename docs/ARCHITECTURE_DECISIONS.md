@@ -174,18 +174,18 @@ Every decision uses the same fields:
   Phase 1 already follows this: `src/auth/` contains no Axum types.
 
 ### ADR-ARCH-03 — Module organization (feature-first vs layer-first)
-- **Status:** **Open** · **Source:** n/a · **Phases:** P2A onward
-- **Current state (implemented):** a hybrid layout:
+- **Status:** Accepted · **Source:** Owner (2026-10-31: keep the current hybrid) · **Phases:** P2A onward
+- **Decision:** a hybrid layout:
   - `src/auth/` holds framework-independent auth logic: domain, service and
     repository.
   - `src/http/` holds handlers, extractors, errors and OpenAPI for all
     features.
   - `src/infrastructure/` holds the database connection, SeaORM entities
     and migrations.
-- **Recommendation (Proposed, not approved):** feature-oriented modules
+- **Not adopted:** the earlier recommendation of feature-oriented modules
   with internal separation of concerns.
-- **Consequences:** Until the owner decides, preserve the existing layout.
-  New features follow the same pattern: a `src/<feature>/` logic module,
+- **Consequences:** Keep the existing layout. New features follow the
+  same pattern: a `src/<feature>/` logic module,
   `src/http/<feature>.rs` handlers, and entities and migrations under
   `src/infrastructure/`. Do not reorganize existing modules without
   approval.
@@ -193,8 +193,8 @@ Every decision uses the same fields:
   default (`src/{portfolios,instruments,cash_accounts}/` plus
   `src/http/<feature>.rs`). Value types used by several features live in
   `src/validation.rs` (`DisplayName`, `CurrencyCode`, `check`) and
-  `src/pagination.rs` (`Page`, `Paged`). The organization question is still
-  Open.
+  `src/pagination.rs` (`Page`, `Paged`). The owner kept this layout on
+  2026-10-31.
 
 ### ADR-ARCH-04 — No speculative abstractions
 - **Status:** Accepted · **Source:** Owner · **Phases:** all
@@ -370,11 +370,11 @@ Every decision uses the same fields:
   - `503`: temporary overload
 
 ### ADR-API-04 — Offset pagination
-- **Status:** Accepted (mechanism) · **Proposed, implemented provisionally in P2A** (limits) · **Source:** Owner (mechanism), Implementation (P2A) (limits) · **Phases:** P2A onward
+- **Status:** Accepted · **Source:** Owner (mechanism; values confirmed 2026-10-31), Implementation (P2A) (values) · **Phases:** P2A onward
 - **Decision:** List endpoints accept `limit` and `offset`, return results in
   a stable deterministic order (with a unique tie-breaker, e.g. `id`), and
   enforce a maximum page size.
-- **Provisional values (awaiting owner confirmation):**
+- **Values (confirmed by the owner, 2026-10-31):**
   - `limit` defaults to 50 and may be 1–200.
   - `offset` defaults to 0 and is capped at the database's signed 64-bit
     maximum.
@@ -521,19 +521,33 @@ Every decision uses the same fields:
   generic.
 
 ### ADR-AUTH-10 — Account recovery
-- **Status:** **Open** · **Phases:** follow-up
-- **Decision:** Not implemented. Neither the mechanism (for example an
-  admin CLI, or email-based reset, which would need email infrastructure
-  that is currently out of scope) nor the session-revocation behaviour
-  after a reset has been decided.
-- **Consequences:** Until this is decided, an operator has to manage
-  accounts directly in the database. Do not invent an insecure recovery
-  flow.
+- **Status:** Accepted · **Source:** Owner (2026-10-31) · **Phases:** MVP
+- **Decision:** The MVP has no account recovery: no password reset, admin
+  command or email flow. The owner considered an admin-run reset command
+  and chose not to build one.
+- **Consequences:** An operator who must recover an account does it
+  directly in the database. Do not add a recovery flow without a new
+  decision.
 
 ### ADR-AUTH-11 — Expired session cleanup
-- **Status:** **Open** · **Phases:** follow-up
-- **Decision:** Not implemented. Expired and revoked rows in
-  `user_sessions` accumulate. When and how they are purged is undecided.
+- **Status:** Accepted · **Source:** Owner (2026-10-31), Implementation · **Phases:** follow-up
+- **Decision:**
+  - A background task in the server process deletes `user_sessions` rows
+    that were revoked, or whose idle or absolute expiry passed, more than
+    one day before (`auth::session::PURGE_GRACE`). Such rows can no longer
+    authenticate.
+  - It runs once at startup, then every hour, and stops at shutdown.
+  - The purge covers every user, because it is maintenance and not a user
+    action. It logs only the number of deleted rows.
+- **Consequences:**
+  - The grace period must stay at least one second. SQLite stores
+    timestamps as RFC 3339 text and compares them as strings, which is
+    exact only to the second.
+  - There is no setting for the interval or the grace period, and no index
+    on the expiry columns. A self-hosted install has few sessions; add an
+    index if that changes.
+  - Deleted sessions leave no record. There is no session audit feature to
+    keep them for.
 
 ---
 
@@ -605,11 +619,10 @@ Every decision uses the same fields:
   - `ACTIVE`: read, update and financial mutations are allowed.
   - `ARCHIVED`: read and export are allowed; financial mutations are
     prohibited; restore to `ACTIVE` is allowed.
-- **Updates while archived: Proposed, implemented provisionally in P2A.**
+- **Updates while archived: Accepted (owner, 2026-10-31).**
   Renaming or changing the base currency of an archived portfolio returns
   `409 portfolio_archived`. This follows the owner's lifecycle, which lists
-  updates only under `ACTIVE`. Awaiting owner confirmation; see
-  [PROJECT_PLAN.md §22](PROJECT_PLAN.md#22-open-questions).
+  updates only under `ACTIVE`.
 - **Implemented transitions (P2A):**
   - archive from `ARCHIVED` returns `409 portfolio_archived`
   - restore from `ACTIVE` returns `409 portfolio_not_archived`
@@ -627,13 +640,12 @@ Every decision uses the same fields:
   - The delete use case must check every financial table that exists at
     the time; each new phase extends that check.
   - Deleting a portfolio with history returns `409 portfolio_has_history`.
-- **Unused cash accounts: Proposed, implemented provisionally in P2B.**
+- **Unused cash accounts: Accepted (owner, 2026-10-31).**
   A cash account with no movements is not financial history. Deleting a
   portfolio therefore runs as one transaction:
   1. confirm the caller owns the portfolio;
   2. delete its cash accounts;
   3. delete the portfolio.
-  Awaiting owner confirmation.
 - **History protection:** ledger tables (P3 onward) reference cash accounts
   and portfolios with immediate `RESTRICT`. Any step that would orphan a
   record fails, the whole transaction rolls back, and the API returns
@@ -651,12 +663,11 @@ Every decision uses the same fields:
   extend `portfolios::service::delete` explicitly.
 
 ### ADR-PORT-05 — Base currency format
-- **Status:** **Proposed, implemented provisionally in P2A** · **Source:** Implementation (P2A) · **Phases:** P2A
+- **Status:** Accepted · **Source:** Owner (2026-10-31), Implementation (P2A) · **Phases:** P2A
 - **Decision:** A base currency is any three ASCII letters, trimmed and
   stored uppercased. It is not checked against the ISO 4217 list.
 - **Consequences:** Tightening to the ISO list later would only affect new
-  writes; existing values would need a migration plan. Awaiting owner
-  confirmation.
+  writes; existing values would need a migration plan.
 
 ### ADR-PORT-06 — Portfolio name
 - **Status:** Accepted · **Source:** Implementation (P2A) · **Phases:** P2A
@@ -702,9 +713,9 @@ Every decision uses the same fields:
     `CHECK` constraint.
   - `CASH` is not an instrument class. Cash, including bank deposits, is
     held in cash accounts.
-- **Bank deposits: Proposed, implemented provisionally in P2B.** A bank
+- **Bank deposits: Accepted (owner, 2026-10-31).** A bank
   deposit is a cash account with no subtype. Fixed-term deposit attributes
-  (maturity, rate) are not modelled. Awaiting owner confirmation.
+  (maturity, rate) are not modelled.
 
 ### ADR-INST-06 — Instrument identifiers (P2B)
 - **Status:** Accepted · **Source:** Implementation (P2B) · **Phases:** P2B
@@ -739,16 +750,16 @@ Every decision uses the same fields:
   needs a decision.
 
 ### ADR-LEDG-02 — Conceptual ledger entities
-- **Status:** Accepted (concepts) / **Open** (physical schema) · **Source:** Owner · **Phases:** P2B–P4
+- **Status:** Accepted · **Source:** Owner (concepts; the P3 and P4 physical schema confirmed 2026-10-31) · **Phases:** P2B–P4
 - **Decision:** The conceptual entities are `transactions`,
   `position_movements`, `cash_movements` and `cash_accounts`. This is a
   baseline, **not** an approved physical schema.
 - **Consequences:** Propose the physical schema (columns, types,
   constraints, indexes) at the start of P3, and get it approved before
   writing migrations.
-- **P3 schema: Proposed, implemented provisionally** (migration
+- **P3 schema: Accepted (owner, 2026-10-31)** (migration
   `m20261024_000006_create_ledger`). It was reviewed by an AGY design pass
-  before implementation. Awaiting owner confirmation.
+  before implementation.
   - **`transactions`:** `id`, `portfolio_id`, `kind`, `trade_date` DATE,
     `sort_order` INT, nullable `instrument_id` / `cash_account_id`, nullable
     decimal-text `quantity`, `price`, `fee`, `tax`, `amount`, `note` (≤500),
@@ -769,7 +780,7 @@ Every decision uses the same fields:
   - **P4 extension:** additive only. Splits and stock dividends add
     movement kinds. Transfers and FX exchanges post two cash movements and
     add nullable transaction columns through `ADD COLUMN`.
-  - **P4 cash transactions: Proposed, implemented provisionally**
+  - **P4 cash transactions: Accepted (owner, 2026-10-31)**
     (migration `m20261030_000007_add_transfer_destination`). It adds one
     nullable column, `transactions.destination_cash_account_id`, with an
     inline `REFERENCES cash_accounts (id) ON DELETE RESTRICT` and an
@@ -778,10 +789,9 @@ Every decision uses the same fields:
     asserts the `RESTRICT` rule, and a P3 database upgrades cleanly
     (smoke-tested). The new kinds reuse the existing columns: `amount`
     holds a deposit, withdrawal, fee, tax or transfer amount, or the gross
-    income; `fee` and `tax` hold what was withheld from income. Awaiting
-    owner confirmation.
-  - **P4 FX exchanges and corporate actions: Proposed, implemented
-    provisionally** (migration
+    income; `fee` and `tax` hold what was withheld from income.
+  - **P4 FX exchanges and corporate actions: Accepted (owner,
+    2026-10-31)** (migration
     `m20261030_000008_add_exchange_and_corporate_actions`):
     - **New columns:** three nullable decimal-text columns on
       `transactions`: `destination_amount` (FX received), `ratio` (a
@@ -796,7 +806,6 @@ Every decision uses the same fields:
       `Split` and `StockDividend`, which adjust lots.
     - **Evidence:** a P3 database upgrades through migrations 7 and 8
       (smoke-tested).
-    - Awaiting owner confirmation.
   - **FIFO in P4:** P3's pure `fifo::Event` only acquires and disposes.
     Splits and stock dividends change existing lots rather than opening
     new ones, so P4 must add lot-adjusting events (raised by the AGY
@@ -857,25 +866,23 @@ Every decision uses the same fields:
 - **Decision:** An opening position (one or several FIFO lots) can be
   recorded without a cash movement. An opening cash balance is recorded as
   a ledger transaction.
-- **Several lots: Proposed, implemented provisionally in P3.**
+- **Several lots: Accepted (owner, 2026-10-31).**
   - Each `OPENING_POSITION` transaction is one lot (`quantity`, `amount` =
     total cost basis), dated by its acquisition date. Several lots are
     entered as several transactions.
   - `OPENING_CASH` sets one account's signed starting balance.
-  - Awaiting owner confirmation.
 
 ### ADR-LEDG-08 — Historical ordering
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3
 - **Decision:** Ordering uses the transaction date plus an explicit
   `sort_order`. There is no settlement date in the MVP. Historical replay
   follows this order.
-- **`sort_order` semantics: Proposed, implemented provisionally in P3.**
+- **`sort_order` semantics: Accepted (owner, 2026-10-31).**
   - It is a portfolio-wide integer, default 0, that orders transactions on
     the same `trade_date` (lower first).
   - Remaining ties are broken by the time-ordered `id`, which is entry
     order. `created_at` is not used, because SQLite stores it as text whose
     sub-second formatting does not sort reliably (AGY design review).
-  - Awaiting owner confirmation.
 
 ### ADR-LEDG-09 — Direct edit and delete with revalidation
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3
@@ -1040,15 +1047,15 @@ Every decision uses the same fields:
     that holding.
 
 ### ADR-TXN-07 — Corporate action allocation and rounding details
-- **Status:** Accepted (approach) / **Proposed** (rules below) · **Source:** Owner (2026-10-30: "follow Snowball Analytics; where it has no rule, choose what is appropriate"), Implementation (P4) · **Phases:** P4
+- **Status:** Accepted (approach; rules 1–4, owner 2026-10-31) / **Proposed** (rules 5–6) · **Source:** Owner (2026-10-30: "follow Snowball Analytics; where it has no rule, choose what is appropriate"), Implementation (P4) · **Phases:** P4
 - **What Snowball Analytics specifies:**
   - A split takes a coefficient: 4 for a four-for-one split, 0.5 for a
     two-to-one reverse split.
   - A stock dividend takes the number of shares received.
   - It documents no lot-level allocation, rounding or cash-in-lieu rules.
-- **Rules chosen in P4 (Proposed):** the owner reviewed them on
-  2026-10-30 and could not judge them, so they stay Proposed. Before
-  relying on cash-in-lieu profit or loss, check these rules against a
+- **Rules chosen in P4:** the owner could not judge them on 2026-10-30,
+  then accepted rules 1–4 on 2026-10-31. Rules 5 and 6 are still Proposed.
+  Before relying on cash-in-lieu profit or loss, check rule 6 against a
   broker statement or a tax adviser.
   1. **Ratio:** a split is entered as `new:old` rather than a single
      coefficient. Ratios such as 1:3 have no exact decimal coefficient.
@@ -1131,9 +1138,9 @@ Every decision uses the same fields:
   so they cannot be mixed up.
 
 ### ADR-NUM-04 — Precision limits
-- **Status:** **Proposed, implemented provisionally in P3** · **Phases:** P3
-- **Decision (provisional):**
-  - **Limits:** every input decimal has at most 8 digits after the point
+- **Status:** Accepted (limits, owner 2026-10-31) / **Proposed** (the other rules) · **Phases:** P3
+- **Decision:**
+  - **Limits (Accepted):** every input decimal has at most 8 digits after the point
     and at most 15 significant digits before it.
   - **Sign rules:** quantity > 0; price ≥ 0; fee, tax and cost basis ≥ 0;
     opening cash is signed.
@@ -1142,15 +1149,17 @@ Every decision uses the same fields:
   - **Derived values:** these may have more decimals. For example
     quantity × price can reach 16, and they are stored exactly.
   - **Minor units:** not enforced per currency.
-- Awaiting owner confirmation.
+- The sign rules, grammar and derived-value rules await owner
+  confirmation.
 
 ### ADR-NUM-05 — Rounding policy
-- **Status:** Accepted (principle) / **Open** (per-operation rules) · **Source:** Owner · **Phases:** P3–P5
+- **Status:** Accepted (principle; P3, P4 and P5 rounding) / **Proposed** (rejecting unrepresentable results) · **Source:** Owner · **Phases:** P3–P5
 - **Decision:** Input precision is preserved. Intermediate results are
   never rounded arbitrarily. Rounding happens only at defined boundaries,
   such as display, settlement amounts and allocation residuals, and every
   operation validates against overflow.
-- **Open:** the rounding mode and scale for each operation.
+- **Per operation:** the rules below. A new operation that rounds needs
+  its own rule.
 - **P5 valuation (Accepted · Source: Owner, 2026-10-30):**
   - quantity × price and multiplying by an FX rate are exact; nothing is
     rounded along the way;
@@ -1160,13 +1169,13 @@ Every decision uses the same fields:
     half-to-even to 8 places;
   - allocation percentages round half-to-even to 4 places (`12.3457`) and
     are not forced to add up to exactly 100.
-- **P4 operations: Proposed, implemented provisionally.**
+- **P4 operations (Accepted · Source: Owner, 2026-10-31):**
   - Cash transactions, transfers and FX exchanges are exact sums; nothing
     is rounded.
   - Splits and stock dividends round holdings half-to-even to 8 places,
     with the residual in the last lot. Cost is never rounded (ADR-TXN-07).
   - The FX executed rate is not computed, so it is never rounded.
-- **P3 FIFO allocation: Proposed, implemented provisionally.**
+- **P3 FIFO allocation (Accepted · Source: Owner, 2026-10-31):**
   - **No rounding needed:** trade amounts are exact, with no rounding.
   - **Whole lot:** consuming a whole lot takes its remaining cost exactly.
   - **Partial lot:** consuming part of a lot takes
@@ -1183,7 +1192,7 @@ Every decision uses the same fields:
     cannot be represented, the write is rejected with
     `422 validation_failed` instead of being rounded. The deliberate
     10-place allocation rounding above is the only rounding in P3.
-  - Awaiting owner confirmation.
+  - Rejecting instead of rounding awaits owner confirmation.
 
 ---
 
@@ -1414,22 +1423,13 @@ Every decision uses the same fields:
 
 | ID | Topic | Blocks |
 | --- | --- | --- |
-| ADR-ARCH-03 | Feature-first vs layer-first module organization (P2A/P2B used the current hybrid) | P3 onward |
-| ADR-API-04 | Confirm page size 50 / 200 (implemented provisionally) | Confirmation only |
-| ADR-PORT-03 | Confirm archived portfolios cannot be updated (implemented provisionally) | Confirmation only |
-| ADR-PORT-05 | Confirm format-only currency validation (implemented provisionally) | Confirmation only |
-| ADR-PORT-04 | Confirm unused cash accounts are deleted with their portfolio (implemented provisionally) | Confirmation only |
-| ADR-INST-04 | Confirm bank deposits are plain cash accounts (implemented provisionally) | Confirmation only |
 | ADR-INST-02 | Confirm deferring the instrument metadata column (implemented provisionally) | Confirmation only |
-| ADR-NUM-04 | Confirm decimal limits (8 dp, 15 integer digits) (implemented provisionally) | Confirmation only |
-| ADR-LEDG-02 | Confirm the P3 ledger schema (implemented provisionally) | Confirmation only |
-| ADR-LEDG-07 | Confirm one OPENING_POSITION per lot (implemented provisionally) | Confirmation only |
-| ADR-LEDG-08 | Confirm `sort_order` semantics (implemented provisionally) | Confirmation only |
-| ADR-NUM-05 | Confirm FIFO allocation rounding (implemented provisionally) | Confirmation only |
-| ADR-LEDG-02 | Confirm the P4 schema: `destination_cash_account_id`, `destination_amount`, `ratio`, `cash_in_lieu_quantity`, and the `SPLIT`/`STOCK_DIVIDEND` movements (implemented provisionally) | Confirmation only |
-| ADR-TXN-07 | Review the corporate-action rules chosen under the owner's delegation (`new:old` ratio, proportional lots, 8-place rounding, residual to the last lot, cash in lieu through FIFO). Owner could not judge them on 2026-10-30. | Confirmation only |
-| ADR-NUM-05 | Confirm the P4 rounding (holdings to 8 places after splits) | Confirmation only |
+| ADR-NUM-04 | Confirm the decimal grammar and sign rules (implemented provisionally; the limits were accepted 2026-10-31) | Confirmation only |
+| ADR-NUM-05 | Confirm rejecting a result that cannot be represented exactly, instead of rounding it (implemented provisionally) | Confirmation only |
+| ADR-TXN-07 | Confirm rules 5–6: reject a split that rounds a holding or lot to zero, and dispose of cash in lieu through FIFO (implemented provisionally; rules 1–4 accepted 2026-10-31) | Confirmation only |
 | ADR-CSV-02 | Import staging model | P6 (deferred by the owner until the rest of the MVP is done) |
-| ADR-AUTH-10 | Account recovery | Before production use |
-| ADR-AUTH-11 | Expired session cleanup | Before production use |
-| — | Performance limits for large ledger replay | P3/P5 |
+
+Answered by the owner on 2026-10-31: ADR-ARCH-03, API-04, PORT-03, PORT-04,
+PORT-05, INST-04, NUM-04 (limits), NUM-05 (P3 and P4 rounding),
+LEDG-02, LEDG-07, LEDG-08, TXN-07 (rules 1–4), AUTH-10, AUTH-11, and no
+hard limit on ledger replay for the MVP.
