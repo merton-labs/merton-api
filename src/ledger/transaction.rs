@@ -1,5 +1,5 @@
 //! Transaction kinds, input validation and their effects on positions and
-//! cash (ADR-LEDG-04 … LEDG-07, ADR-TXN-02, TXN-03, TXN-05).
+//! cash (ADR-LEDG-04 … LEDG-07, ADR-TXN-01 … TXN-08).
 
 use rust_decimal::Decimal;
 use sea_orm::DbErr;
@@ -7,7 +7,9 @@ use time::Date;
 use time::macros::{date, format_description};
 use uuid::Uuid;
 
-use super::decimal::{Amount, Price, Quantity, SignedAmount, exact_add, exact_mul, exact_sub};
+use super::decimal::{
+    Amount, Price, Quantity, Ratio, SignedAmount, exact_add, exact_mul, exact_sub,
+};
 use crate::auth::FieldError;
 
 pub const MAX_NOTE_CHARS: usize = 500;
@@ -34,8 +36,16 @@ pub enum TransactionKind {
     Fee,
     /// A standalone tax payment from a cash account.
     Tax,
+    /// A refund of tax into a cash account.
+    TaxReturn,
     /// Money moved between two cash accounts in the same currency.
     CashTransfer,
+    /// One currency bought with another, between two cash accounts.
+    FxExchange,
+    /// A split or reverse split of an instrument's shares.
+    StockSplit,
+    /// New shares of an instrument received as a dividend.
+    StockDividend,
 }
 
 impl TransactionKind {
@@ -51,7 +61,11 @@ impl TransactionKind {
             Self::Interest => "INTEREST",
             Self::Fee => "FEE",
             Self::Tax => "TAX",
+            Self::TaxReturn => "TAX_RETURN",
             Self::CashTransfer => "CASH_TRANSFER",
+            Self::FxExchange => "FX_EXCHANGE",
+            Self::StockSplit => "STOCK_SPLIT",
+            Self::StockDividend => "STOCK_DIVIDEND",
         }
     }
 
@@ -67,7 +81,11 @@ impl TransactionKind {
             "INTEREST" => Ok(Self::Interest),
             "FEE" => Ok(Self::Fee),
             "TAX" => Ok(Self::Tax),
+            "TAX_RETURN" => Ok(Self::TaxReturn),
             "CASH_TRANSFER" => Ok(Self::CashTransfer),
+            "FX_EXCHANGE" => Ok(Self::FxExchange),
+            "STOCK_SPLIT" => Ok(Self::StockSplit),
+            "STOCK_DIVIDEND" => Ok(Self::StockDividend),
             other => Err(DbErr::Type(format!("unknown transaction kind {other:?}"))),
         }
     }
@@ -77,9 +95,12 @@ impl TransactionKind {
     fn accepts(self) -> &'static [&'static str] {
         match self {
             Self::OpeningPosition => &["instrument_id", "quantity", "amount"],
-            Self::OpeningCash | Self::Deposit | Self::Withdrawal | Self::Fee | Self::Tax => {
-                &["cash_account_id", "amount"]
-            }
+            Self::OpeningCash
+            | Self::Deposit
+            | Self::Withdrawal
+            | Self::Fee
+            | Self::Tax
+            | Self::TaxReturn => &["cash_account_id", "amount"],
             Self::Buy | Self::Sell => &[
                 "instrument_id",
                 "cash_account_id",
@@ -90,7 +111,33 @@ impl TransactionKind {
             ],
             Self::Dividend => &["instrument_id", "cash_account_id", "amount", "fee", "tax"],
             Self::Interest => &["cash_account_id", "amount", "fee", "tax"],
-            Self::CashTransfer => &["cash_account_id", "destination_cash_account_id", "amount"],
+            Self::CashTransfer => &[
+                "cash_account_id",
+                "destination_cash_account_id",
+                "amount",
+                "fee",
+            ],
+            Self::FxExchange => &[
+                "cash_account_id",
+                "destination_cash_account_id",
+                "amount",
+                "destination_amount",
+                "fee",
+            ],
+            Self::StockSplit => &[
+                "instrument_id",
+                "ratio",
+                "cash_in_lieu_quantity",
+                "amount",
+                "cash_account_id",
+            ],
+            Self::StockDividend => &[
+                "instrument_id",
+                "quantity",
+                "cash_in_lieu_quantity",
+                "amount",
+                "cash_account_id",
+            ],
         }
     }
 }
@@ -104,10 +151,13 @@ pub struct RawTransaction<'a> {
     pub cash_account_id: Option<Uuid>,
     pub destination_cash_account_id: Option<Uuid>,
     pub quantity: Option<&'a str>,
+    pub ratio: Option<&'a str>,
     pub price: Option<&'a str>,
     pub fee: Option<&'a str>,
     pub tax: Option<&'a str>,
     pub amount: Option<&'a str>,
+    pub destination_amount: Option<&'a str>,
+    pub cash_in_lieu_quantity: Option<&'a str>,
     pub note: Option<&'a str>,
 }
 
@@ -131,8 +181,8 @@ pub enum Details {
         fee: Amount,
         tax: Amount,
     },
-    /// A deposit, withdrawal, fee or tax: one positive amount on one account.
-    /// The kind gives the direction.
+    /// A deposit, withdrawal, fee, tax or tax return: one positive amount on
+    /// one account. The kind gives the direction.
     CashFlow {
         cash_account_id: Uuid,
         amount: Amount,
@@ -146,12 +196,45 @@ pub enum Details {
         fee: Amount,
         tax: Amount,
     },
-    /// Moves `amount` from one account to another (ADR-TXN-03).
+    /// Moves `amount` from one account to another; the source also pays
+    /// `fee` (ADR-TXN-03/04).
     CashTransfer {
         cash_account_id: Uuid,
         destination_cash_account_id: Uuid,
         amount: Amount,
+        fee: Amount,
     },
+    /// Spends `amount` (plus `fee`) from the source account and receives
+    /// `destination_amount` in an account in another currency (ADR-TXN-04).
+    /// The executed rate is the ratio of the two amounts.
+    FxExchange {
+        cash_account_id: Uuid,
+        amount: Amount,
+        destination_cash_account_id: Uuid,
+        destination_amount: Amount,
+        fee: Amount,
+    },
+    StockSplit {
+        instrument_id: Uuid,
+        ratio: Ratio,
+        cash_in_lieu: Option<CashInLieu>,
+    },
+    /// `quantity` new shares spread over the open lots at no cost.
+    StockDividend {
+        instrument_id: Uuid,
+        quantity: Quantity,
+        cash_in_lieu: Option<CashInLieu>,
+    },
+}
+
+/// Fractional shares a corporate action pays out in cash instead: the
+/// `quantity` (in post-action shares) is disposed of through FIFO for
+/// `amount`, realizing profit or loss (ADR-TXN-06).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CashInLieu {
+    pub quantity: Quantity,
+    pub amount: Amount,
+    pub cash_account_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,12 +246,47 @@ pub struct ValidTransaction {
     pub note: Option<String>,
 }
 
-/// The effect on one instrument: signed quantity, and the lot cost (for an
-/// acquisition) or net proceeds (for a disposal).
+/// How a position movement changes a holding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovementKind {
+    /// Opens a lot of `quantity` costing `amount`.
+    Acquire,
+    /// Disposes of `quantity` for net proceeds `amount`.
+    Dispose,
+    /// Multiplies the holding by `quantity / amount` (new : old shares).
+    Split,
+    /// Adds `quantity` shares over the open lots; `amount` is zero.
+    StockDividend,
+}
+
+impl MovementKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Acquire => "ACQUIRE",
+            Self::Dispose => "DISPOSE",
+            Self::Split => "SPLIT",
+            Self::StockDividend => "STOCK_DIVIDEND",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "ACQUIRE" => Some(Self::Acquire),
+            "DISPOSE" => Some(Self::Dispose),
+            "SPLIT" => Some(Self::Split),
+            "STOCK_DIVIDEND" => Some(Self::StockDividend),
+            _ => None,
+        }
+    }
+}
+
+/// One change to the holding of one instrument; see [`MovementKind`] for
+/// what `quantity` and `amount` mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PositionEffect {
     pub instrument_id: Uuid,
-    pub quantity_delta: Decimal,
+    pub kind: MovementKind,
+    pub quantity: Decimal,
     pub amount: Decimal,
 }
 
@@ -178,9 +296,10 @@ pub struct CashEffect {
     pub amount_delta: Decimal,
 }
 
+/// The movements of one transaction, in the order they apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Effects {
-    pub position: Option<PositionEffect>,
+    pub position: Vec<PositionEffect>,
     pub cash: Vec<CashEffect>,
 }
 
@@ -226,10 +345,13 @@ pub fn validate(
             raw.destination_cash_account_id.is_some(),
         ),
         ("quantity", raw.quantity.is_some()),
+        ("ratio", raw.ratio.is_some()),
         ("price", raw.price.is_some()),
         ("fee", raw.fee.is_some()),
         ("tax", raw.tax.is_some()),
         ("amount", raw.amount.is_some()),
+        ("destination_amount", raw.destination_amount.is_some()),
+        ("cash_in_lieu_quantity", raw.cash_in_lieu_quantity.is_some()),
     ];
     for (field, is_present) in present {
         v.forbid(field, is_present && !kind.accepts().contains(&field), kind);
@@ -285,7 +407,8 @@ pub fn validate(
         TransactionKind::Deposit
         | TransactionKind::Withdrawal
         | TransactionKind::Fee
-        | TransactionKind::Tax => {
+        | TransactionKind::Tax
+        | TransactionKind::TaxReturn => {
             let cash_account_id = v.require("cash_account_id", raw.cash_account_id, kind);
             let amount = v.parse("amount", raw.amount, kind, positive_amount);
             match (cash_account_id, amount) {
@@ -327,7 +450,7 @@ pub fn validate(
                 _ => None,
             }
         }
-        TransactionKind::CashTransfer => {
+        TransactionKind::CashTransfer | TransactionKind::FxExchange => {
             let cash_account_id = v.require("cash_account_id", raw.cash_account_id, kind);
             let destination = v.require(
                 "destination_cash_account_id",
@@ -335,18 +458,80 @@ pub fn validate(
                 kind,
             );
             let amount = v.parse("amount", raw.amount, kind, positive_amount);
+            let destination_amount = if kind == TransactionKind::FxExchange {
+                v.parse(
+                    "destination_amount",
+                    raw.destination_amount,
+                    kind,
+                    positive_amount,
+                )
+            } else {
+                Some(Amount::default())
+            };
+            let fee = v.optional("fee", raw.fee);
             if cash_account_id.is_some() && cash_account_id == destination {
                 v.field::<()>(
                     "destination_cash_account_id",
                     Err("must differ from cash_account_id".to_owned()),
                 );
             }
-            match (cash_account_id, destination, amount) {
-                (Some(cash_account_id), Some(destination_cash_account_id), Some(amount)) => {
-                    Some(Details::CashTransfer {
+            match (
+                cash_account_id,
+                destination,
+                amount,
+                destination_amount,
+                fee,
+            ) {
+                (
+                    Some(cash_account_id),
+                    Some(destination_cash_account_id),
+                    Some(amount),
+                    Some(destination_amount),
+                    Some(fee),
+                ) => Some(if kind == TransactionKind::CashTransfer {
+                    Details::CashTransfer {
                         cash_account_id,
                         destination_cash_account_id,
                         amount,
+                        fee,
+                    }
+                } else {
+                    Details::FxExchange {
+                        cash_account_id,
+                        amount,
+                        destination_cash_account_id,
+                        destination_amount,
+                        fee,
+                    }
+                }),
+                _ => None,
+            }
+        }
+        TransactionKind::StockSplit => {
+            let instrument_id = v.require("instrument_id", raw.instrument_id, kind);
+            let ratio = v.parse("ratio", raw.ratio, kind, Ratio::parse);
+            let cash_in_lieu = v.cash_in_lieu(raw);
+            match (instrument_id, ratio, cash_in_lieu) {
+                (Some(instrument_id), Some(ratio), Some(cash_in_lieu)) => {
+                    Some(Details::StockSplit {
+                        instrument_id,
+                        ratio,
+                        cash_in_lieu,
+                    })
+                }
+                _ => None,
+            }
+        }
+        TransactionKind::StockDividend => {
+            let instrument_id = v.require("instrument_id", raw.instrument_id, kind);
+            let quantity = v.parse("quantity", raw.quantity, kind, Quantity::parse);
+            let cash_in_lieu = v.cash_in_lieu(raw);
+            match (instrument_id, quantity, cash_in_lieu) {
+                (Some(instrument_id), Some(quantity), Some(cash_in_lieu)) => {
+                    Some(Details::StockDividend {
+                        instrument_id,
+                        quantity,
+                        cash_in_lieu,
                     })
                 }
                 _ => None,
@@ -384,11 +569,14 @@ impl ValidTransaction {
     pub fn instrument_id(&self) -> Option<Uuid> {
         match self.details {
             Details::OpeningPosition { instrument_id, .. }
-            | Details::Trade { instrument_id, .. } => Some(instrument_id),
+            | Details::Trade { instrument_id, .. }
+            | Details::StockSplit { instrument_id, .. }
+            | Details::StockDividend { instrument_id, .. } => Some(instrument_id),
             Details::Income { instrument_id, .. } => instrument_id,
             Details::OpeningCash { .. }
             | Details::CashFlow { .. }
-            | Details::CashTransfer { .. } => None,
+            | Details::CashTransfer { .. }
+            | Details::FxExchange { .. } => None,
         }
     }
 
@@ -402,6 +590,9 @@ impl ValidTransaction {
             }
             | Details::CashTransfer {
                 cash_account_id, ..
+            }
+            | Details::FxExchange {
+                cash_account_id, ..
             } => Some(cash_account_id),
             Details::Trade {
                 cash_account_id, ..
@@ -409,6 +600,10 @@ impl ValidTransaction {
             | Details::Income {
                 cash_account_id, ..
             } => cash_account_id,
+            Details::StockSplit { cash_in_lieu, .. }
+            | Details::StockDividend { cash_in_lieu, .. } => {
+                cash_in_lieu.and_then(|c| c.cash_account_id)
+            }
             Details::OpeningPosition { .. } => None,
         }
     }
@@ -416,6 +611,10 @@ impl ValidTransaction {
     pub fn destination_cash_account_id(&self) -> Option<Uuid> {
         match self.details {
             Details::CashTransfer {
+                destination_cash_account_id,
+                ..
+            }
+            | Details::FxExchange {
                 destination_cash_account_id,
                 ..
             } => Some(destination_cash_account_id),
@@ -428,10 +627,13 @@ impl ValidTransaction {
     ///
     /// - Buy: cost = quantity × price + fee + tax; cash −cost.
     /// - Sell: proceeds = quantity × price − fee − tax; cash +proceeds.
-    /// - Deposit: cash +amount. Withdrawal, fee, tax: cash −amount.
+    /// - Deposit, tax return: cash +amount. Withdrawal, fee, tax: cash −amount.
     /// - Dividend, interest: net = amount − fee − tax, which must not be
     ///   negative; cash +net.
-    /// - Cash transfer: source −amount, destination +amount.
+    /// - Cash transfer: source −(amount + fee), destination +amount.
+    /// - FX exchange: source −(amount + fee), destination +destination_amount.
+    /// - Stock split, stock dividend: the lot adjustment, then any cash in
+    ///   lieu as a disposal; cash +amount.
     pub fn effects(&self) -> Result<Effects, FieldError> {
         let overflow = |field| FieldError {
             field,
@@ -441,24 +643,31 @@ impl ValidTransaction {
             cash_account_id,
             amount_delta,
         };
+        let position = |instrument_id, kind, quantity, amount| PositionEffect {
+            instrument_id,
+            kind,
+            quantity,
+            amount,
+        };
         Ok(match self.details {
             Details::OpeningPosition {
                 instrument_id,
                 quantity,
                 cost_basis,
             } => Effects {
-                position: Some(PositionEffect {
+                position: vec![position(
                     instrument_id,
-                    quantity_delta: quantity.value(),
-                    amount: cost_basis.value(),
-                }),
+                    MovementKind::Acquire,
+                    quantity.value(),
+                    cost_basis.value(),
+                )],
                 cash: Vec::new(),
             },
             Details::OpeningCash {
                 cash_account_id,
                 amount,
             } => Effects {
-                position: None,
+                position: Vec::new(),
                 cash: vec![cash(cash_account_id, amount.value())],
             },
             Details::Trade {
@@ -473,19 +682,15 @@ impl ValidTransaction {
                     .ok_or_else(|| overflow("quantity"))?;
                 let charges =
                     exact_add(fee.value(), tax.value()).ok_or_else(|| overflow("quantity"))?;
-                let (quantity_delta, amount, cash_delta) = if self.kind == TransactionKind::Buy {
+                let (kind, amount, cash_delta) = if self.kind == TransactionKind::Buy {
                     let cost = exact_add(gross, charges).ok_or_else(|| overflow("quantity"))?;
-                    (quantity.value(), cost, -cost)
+                    (MovementKind::Acquire, cost, -cost)
                 } else {
                     let proceeds = exact_sub(gross, charges).ok_or_else(|| overflow("quantity"))?;
-                    (-quantity.value(), proceeds, proceeds)
+                    (MovementKind::Dispose, proceeds, proceeds)
                 };
                 Effects {
-                    position: Some(PositionEffect {
-                        instrument_id,
-                        quantity_delta,
-                        amount,
-                    }),
+                    position: vec![position(instrument_id, kind, quantity.value(), amount)],
                     cash: cash_account_id
                         .map(|id| cash(id, cash_delta))
                         .into_iter()
@@ -496,13 +701,17 @@ impl ValidTransaction {
                 cash_account_id,
                 amount,
             } => {
-                let delta = if self.kind == TransactionKind::Deposit {
+                let credit = matches!(
+                    self.kind,
+                    TransactionKind::Deposit | TransactionKind::TaxReturn
+                );
+                let delta = if credit {
                     amount.value()
                 } else {
                     -amount.value()
                 };
                 Effects {
-                    position: None,
+                    position: Vec::new(),
                     cash: vec![cash(cash_account_id, delta)],
                 }
             }
@@ -523,7 +732,7 @@ impl ValidTransaction {
                     });
                 }
                 Effects {
-                    position: None,
+                    position: Vec::new(),
                     cash: cash_account_id
                         .map(|id| cash(id, net))
                         .into_iter()
@@ -534,15 +743,86 @@ impl ValidTransaction {
                 cash_account_id,
                 destination_cash_account_id,
                 amount,
-            } => Effects {
-                position: None,
-                cash: vec![
-                    cash(cash_account_id, -amount.value()),
-                    cash(destination_cash_account_id, amount.value()),
-                ],
-            },
+                fee,
+            } => {
+                let debit =
+                    exact_add(amount.value(), fee.value()).ok_or_else(|| overflow("amount"))?;
+                Effects {
+                    position: Vec::new(),
+                    cash: vec![
+                        cash(cash_account_id, -debit),
+                        cash(destination_cash_account_id, amount.value()),
+                    ],
+                }
+            }
+            Details::FxExchange {
+                cash_account_id,
+                amount,
+                destination_cash_account_id,
+                destination_amount,
+                fee,
+            } => {
+                let debit =
+                    exact_add(amount.value(), fee.value()).ok_or_else(|| overflow("amount"))?;
+                Effects {
+                    position: Vec::new(),
+                    cash: vec![
+                        cash(cash_account_id, -debit),
+                        cash(destination_cash_account_id, destination_amount.value()),
+                    ],
+                }
+            }
+            Details::StockSplit {
+                instrument_id,
+                ratio,
+                cash_in_lieu,
+            } => corporate_action(
+                position(
+                    instrument_id,
+                    MovementKind::Split,
+                    ratio.new_shares().value(),
+                    ratio.old_shares().value(),
+                ),
+                cash_in_lieu,
+            ),
+            Details::StockDividend {
+                instrument_id,
+                quantity,
+                cash_in_lieu,
+            } => corporate_action(
+                position(
+                    instrument_id,
+                    MovementKind::StockDividend,
+                    quantity.value(),
+                    Decimal::ZERO,
+                ),
+                cash_in_lieu,
+            ),
         })
     }
+}
+
+/// A lot adjustment followed by any cash in lieu, disposed of through FIFO.
+fn corporate_action(adjustment: PositionEffect, cash_in_lieu: Option<CashInLieu>) -> Effects {
+    let mut effects = Effects {
+        position: vec![adjustment],
+        cash: Vec::new(),
+    };
+    if let Some(paid) = cash_in_lieu {
+        effects.position.push(PositionEffect {
+            instrument_id: adjustment.instrument_id,
+            kind: MovementKind::Dispose,
+            quantity: paid.quantity.value(),
+            amount: paid.amount.value(),
+        });
+        if let Some(cash_account_id) = paid.cash_account_id {
+            effects.cash.push(CashEffect {
+                cash_account_id,
+                amount_delta: paid.amount.value(),
+            });
+        }
+    }
+    effects
 }
 
 #[derive(Default)]
@@ -599,6 +879,36 @@ impl Validator {
             Some(text) => self.field(field, Amount::parse(text)),
         }
     }
+
+    /// Optional cash in lieu: `cash_in_lieu_quantity` and `amount` come
+    /// together, and `cash_account_id` is only allowed with them.
+    /// `Some(None)` means none was given; `None` means it was invalid.
+    fn cash_in_lieu(&mut self, raw: &RawTransaction<'_>) -> Option<Option<CashInLieu>> {
+        let paired = |field| Err(format!("is required with {field}"));
+        match (raw.cash_in_lieu_quantity, raw.amount) {
+            (None, None) => {
+                if raw.cash_account_id.is_some() {
+                    self.field::<()>(
+                        "cash_account_id",
+                        Err("is only allowed with cash in lieu".to_owned()),
+                    );
+                    return None;
+                }
+                Some(None)
+            }
+            (Some(_), None) => self.field("amount", paired("cash_in_lieu_quantity")),
+            (None, Some(_)) => self.field("cash_in_lieu_quantity", paired("amount")),
+            (Some(quantity), Some(amount)) => {
+                let quantity = self.field("cash_in_lieu_quantity", Quantity::parse(quantity));
+                let amount = self.field("amount", Amount::parse(amount));
+                Some(Some(CashInLieu {
+                    quantity: quantity?,
+                    amount: amount?,
+                    cash_account_id: raw.cash_account_id,
+                }))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -631,8 +941,9 @@ mod tests {
     fn buy_cost_includes_fees_and_taxes() {
         let effects = trade(TransactionKind::Buy, "100", "35.25", "15.50", "1.09");
 
-        let position = effects.position.unwrap();
-        assert_eq!(position.quantity_delta, d("100"));
+        let position = effects.position[0];
+        assert_eq!(position.kind, MovementKind::Acquire);
+        assert_eq!(position.quantity, d("100"));
         assert_eq!(position.amount, d("3541.59")); // 100 × 35.25 = 3525; + 15.50 + 1.09
         assert_eq!(effects.cash[0].amount_delta, d("-3541.59"));
     }
@@ -641,8 +952,9 @@ mod tests {
     fn sell_proceeds_are_net_of_fees_and_taxes() {
         let effects = trade(TransactionKind::Sell, "40", "50", "12", "0.84");
 
-        let position = effects.position.unwrap();
-        assert_eq!(position.quantity_delta, d("-40"));
+        let position = effects.position[0];
+        assert_eq!(position.kind, MovementKind::Dispose);
+        assert_eq!(position.quantity, d("40"));
         assert_eq!(position.amount, d("1987.16"));
         assert_eq!(effects.cash[0].amount_delta, d("1987.16"));
     }
@@ -652,7 +964,7 @@ mod tests {
         let effects = trade(TransactionKind::Buy, "0.33333333", "3.00000001", "0", "0");
 
         // 0.33333333 × 3.00000001 = 0.99999999 + 0.0000000033333333
-        assert_eq!(effects.position.unwrap().amount, d("0.9999999933333333"));
+        assert_eq!(effects.position[0].amount, d("0.9999999933333333"));
     }
 
     #[test]
@@ -752,6 +1064,7 @@ mod tests {
         let account = Uuid::max();
         for (kind, delta) in [
             (TransactionKind::Deposit, "1000.50"),
+            (TransactionKind::TaxReturn, "1000.50"),
             (TransactionKind::Withdrawal, "-1000.50"),
             (TransactionKind::Fee, "-1000.50"),
             (TransactionKind::Tax, "-1000.50"),
@@ -763,7 +1076,7 @@ mod tests {
                 ..Default::default()
             };
             let effects = validate(kind, &raw).unwrap().effects().unwrap();
-            assert_eq!(effects.position, None, "{kind:?}");
+            assert!(effects.position.is_empty(), "{kind:?}");
             assert_eq!(
                 effects.cash,
                 [CashEffect {
@@ -815,7 +1128,7 @@ mod tests {
             .unwrap()
             .effects()
             .unwrap();
-        assert_eq!(effects.position, None);
+        assert!(effects.position.is_empty());
         assert_eq!(effects.cash[0].amount_delta, d("1122.50"));
 
         // Interest is on a cash account and has no instrument.
@@ -876,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    fn transfers_post_balanced_movements() {
+    fn transfers_post_balanced_movements_and_the_source_pays_the_fee() {
         let (from, to) = (Uuid::nil(), Uuid::max());
         let raw = RawTransaction {
             trade_date: "2026-05-01",
@@ -904,6 +1217,17 @@ mod tests {
         );
         let sum: Decimal = effects.cash.iter().map(|c| c.amount_delta).sum();
         assert!(sum.is_zero());
+
+        let with_fee = RawTransaction {
+            fee: Some("1.50"),
+            ..raw
+        };
+        let effects = validate(TransactionKind::CashTransfer, &with_fee)
+            .unwrap()
+            .effects()
+            .unwrap();
+        assert_eq!(effects.cash[0].amount_delta, d("-501.75"));
+        assert_eq!(effects.cash[1].amount_delta, d("500.25"));
     }
 
     #[test]
@@ -922,11 +1246,11 @@ mod tests {
             trade_date: "2026-05-01",
             cash_account_id: Some(Uuid::nil()),
             amount: Some("1"),
-            fee: Some("1"),
+            tax: Some("1"),
             ..Default::default()
         };
         let errors = validate(TransactionKind::CashTransfer, &raw).unwrap_err();
-        assert_eq!(fields(&errors), ["fee", "destination_cash_account_id"]);
+        assert_eq!(fields(&errors), ["tax", "destination_cash_account_id"]);
 
         // Other kinds do not take a destination.
         let raw = RawTransaction {
@@ -938,6 +1262,157 @@ mod tests {
         };
         let errors = validate(TransactionKind::Deposit, &raw).unwrap_err();
         assert_eq!(fields(&errors), ["destination_cash_account_id"]);
+    }
+
+    #[test]
+    fn fx_exchanges_spend_amount_plus_fee_and_receive_the_destination_amount() {
+        // Snowball's example: buy 82 EUR for 100 USD plus a 2.5 USD fee.
+        let (usd, eur) = (Uuid::nil(), Uuid::max());
+        let raw = RawTransaction {
+            trade_date: "2020-01-08",
+            cash_account_id: Some(usd),
+            destination_cash_account_id: Some(eur),
+            amount: Some("100"),
+            destination_amount: Some("82"),
+            fee: Some("2.5"),
+            ..Default::default()
+        };
+        let effects = validate(TransactionKind::FxExchange, &raw)
+            .unwrap()
+            .effects()
+            .unwrap();
+        assert!(effects.position.is_empty());
+        assert_eq!(
+            effects.cash,
+            [
+                CashEffect {
+                    cash_account_id: usd,
+                    amount_delta: d("-102.5"),
+                },
+                CashEffect {
+                    cash_account_id: eur,
+                    amount_delta: d("82"),
+                },
+            ]
+        );
+
+        let missing = RawTransaction {
+            destination_amount: None,
+            ..raw
+        };
+        let errors = validate(TransactionKind::FxExchange, &missing).unwrap_err();
+        assert_eq!(fields(&errors), ["destination_amount"]);
+        // A transfer has no destination amount.
+        let errors = validate(TransactionKind::CashTransfer, &raw).unwrap_err();
+        assert_eq!(fields(&errors), ["destination_amount"]);
+    }
+
+    #[test]
+    fn splits_post_their_ratio_and_optional_cash_in_lieu() {
+        let raw = RawTransaction {
+            trade_date: "2026-06-01",
+            instrument_id: Some(Uuid::nil()),
+            ratio: Some("1:3"),
+            ..Default::default()
+        };
+        let effects = validate(TransactionKind::StockSplit, &raw)
+            .unwrap()
+            .effects()
+            .unwrap();
+        assert_eq!(
+            effects.position,
+            [PositionEffect {
+                instrument_id: Uuid::nil(),
+                kind: MovementKind::Split,
+                quantity: d("1"),
+                amount: d("3"),
+            }]
+        );
+        assert!(effects.cash.is_empty());
+
+        let with_cash = RawTransaction {
+            cash_in_lieu_quantity: Some("0.33333333"),
+            amount: Some("4.10"),
+            cash_account_id: Some(Uuid::max()),
+            ..raw
+        };
+        let effects = validate(TransactionKind::StockSplit, &with_cash)
+            .unwrap()
+            .effects()
+            .unwrap();
+        assert_eq!(effects.position[1].kind, MovementKind::Dispose);
+        assert_eq!(effects.position[1].quantity, d("0.33333333"));
+        assert_eq!(effects.position[1].amount, d("4.10"));
+        assert_eq!(effects.cash[0].amount_delta, d("4.10"));
+    }
+
+    #[test]
+    fn stock_dividends_post_the_new_shares_at_no_cost() {
+        let raw = RawTransaction {
+            trade_date: "2026-06-01",
+            instrument_id: Some(Uuid::nil()),
+            quantity: Some("4"),
+            ..Default::default()
+        };
+        let effects = validate(TransactionKind::StockDividend, &raw)
+            .unwrap()
+            .effects()
+            .unwrap();
+        assert_eq!(effects.position[0].kind, MovementKind::StockDividend);
+        assert_eq!(effects.position[0].quantity, d("4"));
+        assert!(effects.position[0].amount.is_zero());
+    }
+
+    #[test]
+    fn cash_in_lieu_needs_both_quantity_and_amount() {
+        let base = RawTransaction {
+            trade_date: "2026-06-01",
+            instrument_id: Some(Uuid::nil()),
+            ratio: Some("3:2"),
+            ..Default::default()
+        };
+        for (raw, expected) in [
+            (
+                RawTransaction {
+                    cash_in_lieu_quantity: Some("0.5"),
+                    ..base.clone()
+                },
+                "amount",
+            ),
+            (
+                RawTransaction {
+                    amount: Some("5"),
+                    ..base.clone()
+                },
+                "cash_in_lieu_quantity",
+            ),
+            (
+                RawTransaction {
+                    cash_account_id: Some(Uuid::max()),
+                    ..base.clone()
+                },
+                "cash_account_id",
+            ),
+            (
+                RawTransaction {
+                    ratio: Some("2:2"),
+                    ..base.clone()
+                },
+                "ratio",
+            ),
+        ] {
+            let errors = validate(TransactionKind::StockSplit, &raw).unwrap_err();
+            assert_eq!(fields(&errors), [expected]);
+        }
+        let errors = validate(
+            TransactionKind::StockSplit,
+            &RawTransaction {
+                ratio: None,
+                ..base
+            },
+        )
+        .unwrap_err();
+        assert_eq!(fields(&errors), ["ratio"]);
     }
 
     #[test]
@@ -953,11 +1428,23 @@ mod tests {
             TransactionKind::Interest,
             TransactionKind::Fee,
             TransactionKind::Tax,
+            TransactionKind::TaxReturn,
             TransactionKind::CashTransfer,
+            TransactionKind::FxExchange,
+            TransactionKind::StockSplit,
+            TransactionKind::StockDividend,
         ] {
             assert_eq!(TransactionKind::from_db(kind.as_str()).unwrap(), kind);
         }
         assert!(TransactionKind::from_db("SPIN_OFF").is_err());
+        for kind in [
+            MovementKind::Acquire,
+            MovementKind::Dispose,
+            MovementKind::Split,
+            MovementKind::StockDividend,
+        ] {
+            assert_eq!(MovementKind::from_db(kind.as_str()), Some(kind));
+        }
     }
 
     #[test]

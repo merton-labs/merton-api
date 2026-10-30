@@ -1010,3 +1010,283 @@ async fn transfer_destination_column_restricts_deletes() {
         ("cash_accounts", "id", "RESTRICT")
     );
 }
+
+// --- Tax returns, FX exchanges and corporate actions (P4) -------------------
+
+fn fx(from: &str, to: &str, spent: &str, received: &str) -> Value {
+    json!({
+        "kind": "FX_EXCHANGE",
+        "trade_date": "2026-03-03",
+        "cash_account_id": from,
+        "destination_cash_account_id": to,
+        "amount": spent,
+        "destination_amount": received,
+    })
+}
+
+fn split(book: &Book, date: &str, ratio: &str) -> Value {
+    json!({
+        "kind": "STOCK_SPLIT",
+        "trade_date": date,
+        "instrument_id": book.instrument,
+        "ratio": ratio,
+    })
+}
+
+impl TestApp {
+    /// Records `body`, asserting it was accepted.
+    async fn ok(&self, u: &User, book: &Book, body: Value) -> String {
+        let response = self.record(u, book, body).await;
+        assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+        id_of(&response)
+    }
+
+    /// Asserts that exactly `held` units can be sold on `date`, without
+    /// changing the ledger.
+    async fn assert_holding(&self, u: &User, book: &Book, date: &str, held: &str) {
+        let probe = |quantity: &str| sell(book, date, quantity, "1");
+        let over = format!("{}", d(held) + d("0.00000001"));
+        self.record(u, book, with(probe(&over), "sort_order", json!(1000)))
+            .await
+            .assert_problem(StatusCode::CONFLICT, "insufficient_holdings");
+        let id = self
+            .ok(u, book, with(probe(held), "sort_order", json!(1000)))
+            .await;
+        assert_eq!(
+            self.delete_txn(u, book, &id).await.status,
+            StatusCode::NO_CONTENT
+        );
+    }
+}
+
+#[tokio::test]
+async fn tax_returns_credit_the_account() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+
+    let id = app
+        .ok(&alice, &book, cash_flow("TAX_RETURN", &book.cash, "52.40"))
+        .await;
+    assert_eq!(app.cash_rows(&id).await[0].amount_delta, "52.40");
+    assert!(app.position_rows(&id).await.is_empty());
+}
+
+#[tokio::test]
+async fn transfer_fees_are_paid_by_the_source() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+    let savings = app
+        .cash_account(&alice, &book.portfolio, "Savings", "THB")
+        .await;
+
+    app.ok(
+        &alice,
+        &book,
+        with(transfer(&book.cash, &savings, "100"), "fee", json!("15")),
+    )
+    .await;
+    assert_eq!(app.balance(&book.cash).await, d("-115"));
+    assert_eq!(app.balance(&savings).await, d("100"));
+}
+
+#[tokio::test]
+async fn fx_exchanges_post_both_currencies_and_the_fee_on_the_source() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+    let usd = app
+        .cash_account(&alice, &book.portfolio, "USD", "USD")
+        .await;
+
+    // 3,300 THB plus a 25 THB fee buys 100.00 USD.
+    let response = app
+        .record(
+            &alice,
+            &book,
+            with(fx(&book.cash, &usd, "3300", "100.00"), "fee", json!("25")),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+    assert_eq!(response.body["amount"], "3300");
+    assert_eq!(response.body["destination_amount"], "100.00");
+    assert_eq!(response.body["fee"], "25");
+    assert_eq!(app.balance(&book.cash).await, d("-3325"));
+    assert_eq!(app.balance(&usd).await, d("100.00"));
+    assert!(app.position_rows(&id_of(&response)).await.is_empty());
+}
+
+#[tokio::test]
+async fn fx_exchanges_need_two_currencies_in_one_portfolio() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let bob = user(&app, "bob@example.com").await;
+    let book = app.book(&alice).await;
+    let bobs = app.book(&bob).await;
+    let savings = app
+        .cash_account(&alice, &book.portfolio, "Savings", "THB")
+        .await;
+    let bobs_usd = app.cash_account(&bob, &bobs.portfolio, "USD", "USD").await;
+
+    for (body, field) in [
+        // Same currency: that is a transfer.
+        (
+            fx(&book.cash, &savings, "1", "1"),
+            "destination_cash_account_id",
+        ),
+        (
+            fx(&book.cash, &bobs_usd, "1", "1"),
+            "destination_cash_account_id",
+        ),
+        (
+            with(
+                fx(&book.cash, &savings, "1", "1"),
+                "destination_amount",
+                Value::Null,
+            ),
+            "destination_amount",
+        ),
+    ] {
+        let response = app.record(&alice, &book, body.clone()).await;
+        response.assert_problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+        assert_eq!(response.body["errors"][0]["field"], field, "{body}");
+    }
+    assert_eq!(app.ledger_row_counts().await, (0, 0, 0));
+}
+
+#[tokio::test]
+async fn splits_scale_holdings_and_replay_after_edits() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+    let bought = app
+        .ok(&alice, &book, buy(&book, "2026-01-10", "10", "40"))
+        .await;
+    let split_id = app
+        .ok(&alice, &book, split(&book, "2026-02-01", "4:1"))
+        .await;
+
+    let rows = app.position_rows(&split_id).await;
+    assert_eq!(
+        (
+            rows[0].kind.as_str(),
+            rows[0].quantity.as_str(),
+            rows[0].amount.as_str()
+        ),
+        ("SPLIT", "4", "1")
+    );
+    app.assert_holding(&alice, &book, "2026-02-01", "40").await;
+
+    // A sale of all 40 depends on the purchase made before the split.
+    app.ok(&alice, &book, sell(&book, "2026-03-01", "40", "11"))
+        .await;
+    app.replace_txn(&alice, &book, &bought, buy(&book, "2026-01-10", "9", "40"))
+        .await
+        .assert_problem(StatusCode::CONFLICT, "insufficient_holdings");
+    // Removing the split leaves the sale uncovered too.
+    app.delete_txn(&alice, &book, &split_id)
+        .await
+        .assert_problem(StatusCode::CONFLICT, "insufficient_holdings");
+}
+
+#[tokio::test]
+async fn reverse_splits_can_pay_the_fraction_as_cash_in_lieu() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+    app.ok(&alice, &book, buy(&book, "2026-01-10", "10", "3"))
+        .await;
+
+    // 10 shares 1:3 is 3.33333333; the 0.33333333 is paid out as 4.00.
+    let mut body = split(&book, "2026-02-01", "1:3");
+    body["cash_in_lieu_quantity"] = json!("0.33333333");
+    body["amount"] = json!("4.00");
+    body["cash_account_id"] = json!(book.cash);
+    let id = app.ok(&alice, &book, body).await;
+
+    let rows = app.position_rows(&id).await;
+    let kinds: Vec<_> = rows.iter().map(|r| r.kind.as_str()).collect();
+    assert!(
+        kinds.contains(&"SPLIT") && kinds.contains(&"DISPOSE"),
+        "{kinds:?}"
+    );
+    assert_eq!(app.cash_rows(&id).await[0].amount_delta, "4.00");
+    app.assert_holding(&alice, &book, "2026-02-01", "3").await;
+}
+
+#[tokio::test]
+async fn stock_dividends_add_shares() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+    app.ok(&alice, &book, buy(&book, "2026-01-10", "10", "5"))
+        .await;
+    app.ok(&alice, &book, buy(&book, "2026-01-20", "30", "6"))
+        .await;
+
+    let id = app
+        .ok(
+            &alice,
+            &book,
+            json!({
+                "kind": "STOCK_DIVIDEND", "trade_date": "2026-02-01",
+                "instrument_id": book.instrument, "quantity": "4",
+            }),
+        )
+        .await;
+    let rows = app.position_rows(&id).await;
+    assert_eq!(
+        (
+            rows[0].kind.as_str(),
+            rows[0].quantity.as_str(),
+            rows[0].amount.as_str()
+        ),
+        ("STOCK_DIVIDEND", "4", "0")
+    );
+    assert!(app.cash_rows(&id).await.is_empty());
+    app.assert_holding(&alice, &book, "2026-02-01", "44").await;
+}
+
+#[tokio::test]
+async fn corporate_actions_need_a_holding() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+
+    app.record(&alice, &book, split(&book, "2026-02-01", "2:1"))
+        .await
+        .assert_problem(StatusCode::CONFLICT, "no_holdings");
+    assert_eq!(app.ledger_row_counts().await, (0, 0, 0));
+
+    // Deleting the only purchase before a split is refused the same way.
+    let bought = app
+        .ok(&alice, &book, buy(&book, "2026-01-10", "1", "5"))
+        .await;
+    app.ok(&alice, &book, split(&book, "2026-02-01", "2:1"))
+        .await;
+    app.delete_txn(&alice, &book, &bought)
+        .await
+        .assert_problem(StatusCode::CONFLICT, "no_holdings");
+    assert_eq!(app.ledger_row_counts().await, (2, 2, 0));
+}
+
+#[tokio::test]
+async fn cash_in_lieu_goes_to_an_account_in_the_quote_currency() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+    let usd = app
+        .cash_account(&alice, &book.portfolio, "USD", "USD")
+        .await;
+    app.ok(&alice, &book, buy(&book, "2026-01-10", "3", "1"))
+        .await;
+
+    let mut body = split(&book, "2026-02-01", "1:2");
+    body["cash_in_lieu_quantity"] = json!("0.5");
+    body["amount"] = json!("1");
+    body["cash_account_id"] = json!(usd);
+    let response = app.record(&alice, &book, body).await;
+    response.assert_problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(response.body["errors"][0]["field"], "cash_account_id");
+}

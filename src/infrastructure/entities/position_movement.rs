@@ -1,7 +1,9 @@
 use sea_orm::entity::prelude::*;
 
 /// One transaction's effect on one instrument: `ACQUIRE` opens a lot with
-/// `amount` as its cost; `DISPOSE` consumes lots for `amount` net proceeds.
+/// `amount` as its cost; `DISPOSE` consumes lots for `amount` net proceeds;
+/// `SPLIT` multiplies the holding by `quantity / amount` (new : old shares);
+/// `STOCK_DIVIDEND` adds `quantity` shares over the open lots (`amount` 0).
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "position_movements")]
 pub struct Model {

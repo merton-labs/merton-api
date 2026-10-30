@@ -16,10 +16,12 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, TransactionTrait};
 use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
-use super::decimal::{Amount, Quantity, SignedAmount};
+use super::decimal::{Amount, Quantity, Ratio, SignedAmount};
 use super::fifo::{self, Event, FifoError};
 use super::repository;
-use super::transaction::{Details, RawTransaction, TransactionKind, ValidTransaction, validate};
+use super::transaction::{
+    Details, MovementKind, RawTransaction, TransactionKind, ValidTransaction, validate,
+};
 use crate::auth::{FieldError, UserId};
 use crate::cash_accounts::repository as cash_accounts;
 use crate::infrastructure::database::is_foreign_key_violation;
@@ -27,9 +29,6 @@ use crate::infrastructure::entities::{cash_movement, position_movement, transact
 use crate::instruments::repository as instruments;
 use crate::pagination::{Page, Paged};
 use crate::portfolios::repository as portfolios;
-
-const ACQUIRE: &str = "ACQUIRE";
-const DISPOSE: &str = "DISPOSE";
 
 /// A recorded transaction. Decimal fields are canonical decimal strings, at
 /// the scale they were entered with.
@@ -44,10 +43,13 @@ pub struct LedgerEntry {
     pub cash_account_id: Option<Uuid>,
     pub destination_cash_account_id: Option<Uuid>,
     pub quantity: Option<String>,
+    pub ratio: Option<String>,
     pub price: Option<String>,
     pub fee: Option<String>,
     pub tax: Option<String>,
     pub amount: Option<String>,
+    pub destination_amount: Option<String>,
+    pub cash_in_lieu_quantity: Option<String>,
     pub note: Option<String>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -64,6 +66,12 @@ pub enum LedgerError {
     PortfolioArchived,
     #[error("holdings of instrument {instrument_id} would go negative on {trade_date}")]
     InsufficientHoldings {
+        instrument_id: Uuid,
+        trade_date: Date,
+    },
+    /// A split or stock dividend on a date with no holding to adjust.
+    #[error("no holding of instrument {instrument_id} to adjust on {trade_date}")]
+    NoHoldings {
         instrument_id: Uuid,
         trade_date: Date,
     },
@@ -293,14 +301,25 @@ async fn check_references(
                 ),
             });
         }
-        ([(_, source), (field, destination)], _) if source.currency != destination.currency => {
-            errors.push(FieldError {
-                field,
-                message: format!(
-                    "is in {} but the source account is in {}",
-                    destination.currency, source.currency
-                ),
-            });
+        ([(_, source), (field, destination)], _) => {
+            let same = source.currency == destination.currency;
+            if valid.kind == TransactionKind::FxExchange && same {
+                errors.push(FieldError {
+                    field,
+                    message: format!(
+                        "is in {}, the same currency as the source account; use CASH_TRANSFER",
+                        destination.currency
+                    ),
+                });
+            } else if valid.kind == TransactionKind::CashTransfer && !same {
+                errors.push(FieldError {
+                    field,
+                    message: format!(
+                        "is in {} but the source account is in {}; use FX_EXCHANGE",
+                        destination.currency, source.currency
+                    ),
+                });
+            }
         }
         _ => {}
     }
@@ -319,12 +338,9 @@ async fn post_movements(
     let effects = valid
         .effects()
         .map_err(|error| LedgerError::Validation(vec![error]))?;
-    if let Some(position) = effects.position {
-        let (kind, quantity) = if position.quantity_delta.is_sign_negative() {
-            (DISPOSE, -position.quantity_delta)
-        } else {
-            (ACQUIRE, position.quantity_delta)
-        };
+    // Movement ids are time-ordered, so a transaction's movements replay in
+    // the order they are posted here.
+    for position in effects.position {
         repository::insert_position_movement(
             txn,
             position_movement::Model {
@@ -332,8 +348,8 @@ async fn post_movements(
                 transaction_id: model.id,
                 portfolio_id: model.portfolio_id,
                 instrument_id: position.instrument_id,
-                kind: kind.to_owned(),
-                quantity: quantity.to_string(),
+                kind: position.kind.as_str().to_owned(),
+                quantity: position.quantity.to_string(),
                 amount: position.amount.to_string(),
             },
         )
@@ -375,10 +391,25 @@ async fn replay(
                     trade_date: history[event].1.trade_date,
                 });
             }
+            Err(FifoError::NoHoldings { event }) => {
+                return Err(LedgerError::NoHoldings {
+                    instrument_id,
+                    trade_date: history[event].1.trade_date,
+                });
+            }
             Err(FifoError::Overflow { .. }) => {
                 return Err(LedgerError::Validation(vec![FieldError {
                     field: "quantity",
                     message: "the resulting holdings or cost basis are too large".to_owned(),
+                }]));
+            }
+            Err(FifoError::RoundsToZero { event }) => {
+                return Err(LedgerError::Validation(vec![FieldError {
+                    field: "ratio",
+                    message: format!(
+                        "the split on {} would leave a lot too small to represent",
+                        history[event].1.trade_date
+                    ),
                 }]));
             }
         }
@@ -389,16 +420,26 @@ async fn replay(
 fn to_event(movement: &position_movement::Model) -> Result<Event, DbErr> {
     let corrupt = |err: String| DbErr::Type(format!("movement {}: {err}", movement.id));
     let quantity = Quantity::from_stored(&movement.quantity).map_err(corrupt)?;
-    match movement.kind.as_str() {
-        ACQUIRE => Ok(Event::Acquire {
+    match MovementKind::from_db(&movement.kind) {
+        Some(MovementKind::Acquire) => Ok(Event::Acquire {
             quantity,
             cost: Amount::from_stored(&movement.amount).map_err(corrupt)?,
         }),
-        DISPOSE => Ok(Event::Dispose {
+        Some(MovementKind::Dispose) => Ok(Event::Dispose {
             quantity,
             proceeds: SignedAmount::from_stored(&movement.amount).map_err(corrupt)?,
         }),
-        other => Err(corrupt(format!("unknown movement kind {other:?}"))),
+        Some(MovementKind::Split) => Ok(Event::Split {
+            ratio: Ratio::from_parts(
+                quantity,
+                Quantity::from_stored(&movement.amount).map_err(corrupt)?,
+            ),
+        }),
+        Some(MovementKind::StockDividend) => Ok(Event::StockDividend { quantity }),
+        None => Err(corrupt(format!(
+            "unknown movement kind {:?}",
+            movement.kind
+        ))),
     }
 }
 
@@ -420,10 +461,13 @@ fn to_model(
         cash_account_id: valid.cash_account_id(),
         destination_cash_account_id: valid.destination_cash_account_id(),
         quantity: None,
+        ratio: None,
         price: None,
         fee: None,
         tax: None,
         amount: None,
+        destination_amount: None,
+        cash_in_lieu_quantity: None,
         note: valid.note.clone(),
         created_at,
         updated_at,
@@ -438,8 +482,42 @@ fn to_model(
             model.amount = text(cost_basis);
         }
         Details::OpeningCash { amount, .. } => model.amount = text(amount),
-        Details::CashFlow { amount, .. } | Details::CashTransfer { amount, .. } => {
+        Details::CashFlow { amount, .. } => model.amount = text(amount),
+        Details::CashTransfer { amount, fee, .. } => {
             model.amount = text(amount);
+            model.fee = text(fee);
+        }
+        Details::FxExchange {
+            amount,
+            destination_amount,
+            fee,
+            ..
+        } => {
+            model.amount = text(amount);
+            model.destination_amount = text(destination_amount);
+            model.fee = text(fee);
+        }
+        Details::StockSplit {
+            ratio,
+            cash_in_lieu,
+            ..
+        } => {
+            model.ratio = text(ratio);
+            if let Some(paid) = cash_in_lieu {
+                model.cash_in_lieu_quantity = text(&paid.quantity);
+                model.amount = text(&paid.amount);
+            }
+        }
+        Details::StockDividend {
+            quantity,
+            cash_in_lieu,
+            ..
+        } => {
+            model.quantity = text(quantity);
+            if let Some(paid) = cash_in_lieu {
+                model.cash_in_lieu_quantity = text(&paid.quantity);
+                model.amount = text(&paid.amount);
+            }
         }
         Details::Income {
             gross, fee, tax, ..
@@ -475,10 +553,13 @@ fn to_entry(model: transaction::Model) -> Result<LedgerEntry, LedgerError> {
         cash_account_id: model.cash_account_id,
         destination_cash_account_id: model.destination_cash_account_id,
         quantity: model.quantity,
+        ratio: model.ratio,
         price: model.price,
         fee: model.fee,
         tax: model.tax,
         amount: model.amount,
+        destination_amount: model.destination_amount,
+        cash_in_lieu_quantity: model.cash_in_lieu_quantity,
         note: model.note,
         created_at: model.created_at,
         updated_at: model.updated_at,

@@ -39,14 +39,14 @@ fn assert_conserved(events: &[Event], result: &Replay) {
         .iter()
         .filter_map(|e| match e {
             Event::Acquire { quantity, .. } => Some(quantity.value()),
-            Event::Dispose { .. } => None,
+            _ => None,
         })
         .sum();
     let acquired_cost: Decimal = events
         .iter()
         .filter_map(|e| match e {
             Event::Acquire { cost, .. } => Some(cost.value()),
-            Event::Dispose { .. } => None,
+            _ => None,
         })
         .sum();
 

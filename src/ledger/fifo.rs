@@ -8,13 +8,23 @@
 //! `cost × taken / quantity`, rounded half-to-even to
 //! [`ALLOCATION_SCALE`] places, and the lot keeps the exact remainder, so
 //! total cost is conserved with no rounding drift.
+//!
+//! Splits and stock dividends (ADR-TXN-06/07) change the quantity of every
+//! open lot in proportion and keep each lot's cost and date, so total cost
+//! is unchanged. A lot's new quantity is rounded half-to-even to
+//! [`QUANTITY_SCALE`] places, and the last lot takes the difference so the
+//! lots add up to the new total exactly.
 
 use rust_decimal::{Decimal, RoundingStrategy};
 
-use super::decimal::{Amount, Quantity, SignedAmount, exact_add, exact_sub};
+use super::decimal::{
+    Amount, Quantity, Ratio, SignedAmount, div_round, exact_add, exact_mul, exact_sub,
+};
 
 /// Decimal places used for cost allocated out of a partially consumed lot.
 pub const ALLOCATION_SCALE: u32 = 10;
+/// Decimal places of a holding after a split, the same as entered quantities.
+pub const QUANTITY_SCALE: u32 = super::decimal::MAX_SCALE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -27,6 +37,11 @@ pub enum Event {
         quantity: Quantity,
         proceeds: SignedAmount,
     },
+    /// Multiplies the holding by `new / old`; the new total is rounded to
+    /// [`QUANTITY_SCALE`] places.
+    Split { ratio: Ratio },
+    /// Adds `quantity` shares spread over the open lots, at no cost.
+    StockDividend { quantity: Quantity },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +94,12 @@ pub enum FifoError {
     /// A total would overflow or need rounding to stay representable.
     #[error("event {event} exceeds the supported numeric range")]
     Overflow { event: usize },
+    /// A split or stock dividend applies to an instrument with no holding.
+    #[error("event {event} adjusts a holding that is empty")]
+    NoHoldings { event: usize },
+    /// A split would round the holding, or one of its lots, to zero.
+    #[error("event {event} leaves a lot too small to represent")]
+    RoundsToZero { event: usize },
 }
 
 /// Replays `events` in order and returns the open lots and disposals.
@@ -112,9 +133,45 @@ pub fn replay(events: impl IntoIterator<Item = Event>) -> Result<Replay, FifoErr
                 state.cost = exact_sub(state.cost, disposal.cost_basis).ok_or(overflow)?;
                 state.disposals.push(disposal);
             }
+            Event::Split { ratio } => {
+                let scaled =
+                    exact_mul(state.quantity, ratio.new_shares().value()).ok_or(overflow)?;
+                let total = div_round(scaled, ratio.old_shares().value(), QUANTITY_SCALE)
+                    .ok_or(overflow)?;
+                rescale(&mut state, index, total)?;
+            }
+            Event::StockDividend { quantity } => {
+                let total = exact_add(state.quantity, quantity.value()).ok_or(overflow)?;
+                rescale(&mut state, index, total)?;
+            }
         }
     }
     Ok(state)
+}
+
+/// Spreads `total` units over the open lots in proportion to their current
+/// quantities. Costs are untouched.
+fn rescale(state: &mut Replay, event: usize, total: Decimal) -> Result<(), FifoError> {
+    let overflow = FifoError::Overflow { event };
+    let held = state.quantity;
+    let Some(last) = state.lots.len().checked_sub(1).filter(|_| !held.is_zero()) else {
+        return Err(FifoError::NoHoldings { event });
+    };
+    let mut assigned = Decimal::ZERO;
+    for (i, lot) in state.lots.iter_mut().enumerate() {
+        lot.quantity = if i == last {
+            exact_sub(total, assigned).ok_or(overflow)?
+        } else {
+            let share = exact_mul(lot.quantity, total).ok_or(overflow)?;
+            div_round(share, held, QUANTITY_SCALE).ok_or(overflow)?
+        };
+        if lot.quantity <= Decimal::ZERO {
+            return Err(FifoError::RoundsToZero { event });
+        }
+        assigned = exact_add(assigned, lot.quantity).ok_or(overflow)?;
+    }
+    state.quantity = total;
+    Ok(())
 }
 
 /// Consumes `requested` units from the oldest lots. The caller has checked
@@ -279,6 +336,121 @@ mod tests {
         };
 
         assert_eq!(replay([huge, huge]), Err(FifoError::Overflow { event: 1 }));
+    }
+
+    fn split(ratio: &str) -> Event {
+        Event::Split {
+            ratio: Ratio::parse(ratio).unwrap(),
+        }
+    }
+
+    fn stock_dividend(qty: &str) -> Event {
+        Event::StockDividend { quantity: q(qty) }
+    }
+
+    #[test]
+    fn splits_scale_every_lot_and_keep_cost() {
+        let result = replay([buy("10", "100"), buy("5", "80"), split("4:1")]).unwrap();
+
+        let lots: Vec<_> = result.lots.iter().map(|l| (l.quantity, l.cost)).collect();
+        assert_eq!(lots, [(d("40"), d("100")), (d("20"), d("80"))]);
+        assert_eq!(result.quantity(), d("60"));
+        assert_eq!(result.cost(), d("180"));
+        // Lots keep their acquisition order.
+        assert_eq!(result.lots[0].opened_by, 0);
+    }
+
+    #[test]
+    fn reverse_splits_round_lots_and_put_the_residual_in_the_last_one() {
+        // 10 + 10 + 10 = 30 shares at 1:7 → 4.28571428571… ≈ 4.28571429.
+        let result = replay([
+            buy("10", "70"),
+            buy("10", "70"),
+            buy("10", "70"),
+            split("1:7"),
+        ])
+        .unwrap();
+
+        let quantities: Vec<_> = result.lots.iter().map(|l| l.quantity).collect();
+        assert_eq!(
+            quantities,
+            [d("1.42857143"), d("1.42857143"), d("1.42857143")]
+        );
+        assert_eq!(result.quantity(), d("4.28571429"));
+        assert_eq!(quantities.iter().sum::<Decimal>(), result.quantity());
+        assert_eq!(result.cost(), d("210"));
+    }
+
+    #[test]
+    fn residuals_keep_lots_summing_to_the_total() {
+        // 1 + 2 = 3 shares, 1:3 → exactly 1 share in total.
+        let result = replay([buy("1", "10"), buy("2", "20"), split("1:3")]).unwrap();
+
+        let quantities: Vec<_> = result.lots.iter().map(|l| l.quantity).collect();
+        assert_eq!(quantities, [d("0.33333333"), d("0.66666667")]);
+        assert_eq!(result.quantity(), d("1"));
+
+        // Three lots of 1 at 1:3: rounding each alone would give 0.99999999.
+        let result = replay([buy("1", "1"), buy("1", "1"), buy("1", "1"), split("1:3")]).unwrap();
+        let quantities: Vec<_> = result.lots.iter().map(|l| l.quantity).collect();
+        assert_eq!(
+            quantities,
+            [d("0.33333333"), d("0.33333333"), d("0.33333334")]
+        );
+        assert_eq!(quantities.iter().sum::<Decimal>(), d("1"));
+        // Selling the whole holding closes every lot.
+        let closed = replay([
+            buy("1", "1"),
+            buy("1", "1"),
+            buy("1", "1"),
+            split("1:3"),
+            sell("1", "5"),
+        ])
+        .unwrap();
+        assert!(closed.lots.is_empty());
+        assert_eq!(closed.disposals[0].cost_basis, d("3"));
+    }
+
+    #[test]
+    fn stock_dividends_spread_over_lots_at_no_cost() {
+        // 10 + 30 shares, 4 new shares (10%): each lot grows by 10%.
+        let result = replay([buy("10", "100"), buy("30", "600"), stock_dividend("4")]).unwrap();
+
+        let lots: Vec<_> = result.lots.iter().map(|l| (l.quantity, l.cost)).collect();
+        assert_eq!(lots, [(d("11"), d("100")), (d("33"), d("600"))]);
+        assert_eq!(result.quantity(), d("44"));
+        assert_eq!(result.cost(), d("700"));
+
+        // Selling the first (grown) lot takes its whole original cost.
+        let sold = replay([
+            buy("10", "100"),
+            buy("30", "600"),
+            stock_dividend("4"),
+            sell("11", "130"),
+        ])
+        .unwrap();
+        assert_eq!(sold.disposals[0].cost_basis, d("100"));
+        assert_eq!(sold.disposals[0].realized, d("30"));
+    }
+
+    #[test]
+    fn corporate_actions_need_a_holding() {
+        assert_eq!(
+            replay([split("2:1")]),
+            Err(FifoError::NoHoldings { event: 0 })
+        );
+        assert_eq!(
+            replay([buy("1", "1"), sell("1", "1"), stock_dividend("1")]),
+            Err(FifoError::NoHoldings { event: 2 })
+        );
+    }
+
+    #[test]
+    fn a_split_that_rounds_a_lot_to_zero_is_rejected() {
+        assert_eq!(
+            replay([buy("0.00000001", "1"), split("1:10")]),
+            Err(FifoError::RoundsToZero { event: 1 })
+        );
     }
 
     #[test]

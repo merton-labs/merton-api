@@ -1102,13 +1102,24 @@ async fn openapi_documents_all_transaction_operations_security_and_csrf() {
             "INTEREST",
             "FEE",
             "TAX",
-            "CASH_TRANSFER"
+            "TAX_RETURN",
+            "CASH_TRANSFER",
+            "FX_EXCHANGE",
+            "STOCK_SPLIT",
+            "STOCK_DIVIDEND"
         ])
     );
     for schema in ["TransactionRequest", "TransactionResponse"] {
-        assert!(
-            schemas[schema]["properties"]["destination_cash_account_id"].is_object(),
-            "{schema}"
-        );
+        for field in [
+            "destination_cash_account_id",
+            "destination_amount",
+            "ratio",
+            "cash_in_lieu_quantity",
+        ] {
+            assert!(
+                schemas[schema]["properties"][field].is_object(),
+                "{schema}.{field}"
+            );
+        }
     }
 }

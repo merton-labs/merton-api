@@ -84,6 +84,28 @@ pub fn exact_sub(a: Decimal, b: Decimal) -> Option<Decimal> {
     from_parts(rescaled(a, scale)?.checked_sub(rescaled(b, scale)?)?, scale)
 }
 
+/// `a ÷ b` rounded half-to-even to `scale` places, computed exactly on the
+/// mantissas (no intermediate 28-digit rounding). `a` must not be negative
+/// and `b` must be positive; `None` otherwise or on overflow.
+pub fn div_round(a: Decimal, b: Decimal, scale: u32) -> Option<Decimal> {
+    if (a.is_sign_negative() && !a.is_zero()) || b <= Decimal::ZERO {
+        return None;
+    }
+    // a / b = (ma / 10^sa) / (mb / 10^sb); scaled by 10^scale.
+    let shift = i64::from(b.scale()) + i64::from(scale) - i64::from(a.scale());
+    let power = |exp: i64| 10i128.checked_pow(u32::try_from(exp).ok()?);
+    let (numerator, denominator) = if shift >= 0 {
+        (a.mantissa().checked_mul(power(shift)?)?, b.mantissa())
+    } else {
+        (a.mantissa(), b.mantissa().checked_mul(power(-shift)?)?)
+    };
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    let twice = remainder.checked_mul(2)?;
+    let round_up = twice > denominator || (twice == denominator && quotient % 2 == 1);
+    from_parts(quotient + i128::from(round_up), scale)
+}
+
 /// The mantissa of `value` expressed at `scale` (≥ its own scale).
 fn rescaled(value: Decimal, scale: u32) -> Option<i128> {
     let factor = 10i128.checked_pow(scale - value.scale())?;
@@ -161,9 +183,85 @@ ledger_decimal!(
     Sign::Any
 );
 
+/// A split ratio `new:old`: holders get `new` shares for every `old` shares.
+/// `4:1` is a four-for-one split and `1:3` a one-for-three reverse split.
+/// Two numbers keep ratios such as 1:3 exact, where a coefficient could not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ratio {
+    new: Quantity,
+    old: Quantity,
+}
+
+impl Ratio {
+    pub fn parse(input: &str) -> Result<Self, String> {
+        let shape = || "must be two positive numbers such as 4:1 (new:old)".to_owned();
+        let (new, old) = input.trim().split_once(':').ok_or_else(shape)?;
+        let (new, old) = (
+            Quantity::parse(new).map_err(|_| shape())?,
+            Quantity::parse(old).map_err(|_| shape())?,
+        );
+        if new.value() == old.value() {
+            return Err("must change the number of shares".to_owned());
+        }
+        Ok(Self { new, old })
+    }
+
+    pub fn from_parts(new: Quantity, old: Quantity) -> Self {
+        Self { new, old }
+    }
+
+    pub fn new_shares(self) -> Quantity {
+        self.new
+    }
+
+    pub fn old_shares(self) -> Quantity {
+        self.old
+    }
+}
+
+impl fmt::Display for Ratio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.new, self.old)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn division_rounds_half_to_even_without_intermediate_rounding() {
+        let d = |s: &str| s.parse::<Decimal>().unwrap();
+        assert_eq!(div_round(d("10"), d("3"), 8), Some(d("3.33333333")));
+        assert_eq!(div_round(d("20"), d("3"), 8), Some(d("6.66666667")));
+        assert_eq!(
+            div_round(d("0.000000025"), d("1"), 8),
+            Some(d("0.00000002"))
+        );
+        assert_eq!(
+            div_round(d("0.000000035"), d("1"), 8),
+            Some(d("0.00000004"))
+        );
+        assert_eq!(div_round(d("12.5"), d("0.5"), 8), Some(d("25.00000000")));
+        assert_eq!(div_round(d("0"), d("7"), 8), Some(d("0.00000000")));
+        assert_eq!(div_round(d("1"), d("0"), 8), None);
+        assert_eq!(div_round(d("-1"), d("2"), 8), None);
+    }
+
+    #[test]
+    fn ratios_are_two_positive_numbers() {
+        assert_eq!(Ratio::parse("4:1").unwrap().to_string(), "4:1");
+        assert_eq!(Ratio::parse(" 3:2 ").unwrap().to_string(), "3:2");
+        assert_eq!(
+            Ratio::parse("1:3").unwrap().old_shares().value(),
+            Decimal::from(3)
+        );
+        for bad in [
+            "4", "4:", ":1", "0:1", "-1:2", "1:1", "2.0:2", "1e1:1", "4:1:1",
+        ] {
+            assert!(Ratio::parse(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn preserves_entered_scale() {

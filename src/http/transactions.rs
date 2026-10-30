@@ -31,7 +31,11 @@ pub enum TransactionKindDto {
     Interest,
     Fee,
     Tax,
+    TaxReturn,
     CashTransfer,
+    FxExchange,
+    StockSplit,
+    StockDividend,
 }
 
 impl From<TransactionKindDto> for TransactionKind {
@@ -47,7 +51,11 @@ impl From<TransactionKindDto> for TransactionKind {
             TransactionKindDto::Interest => Self::Interest,
             TransactionKindDto::Fee => Self::Fee,
             TransactionKindDto::Tax => Self::Tax,
+            TransactionKindDto::TaxReturn => Self::TaxReturn,
             TransactionKindDto::CashTransfer => Self::CashTransfer,
+            TransactionKindDto::FxExchange => Self::FxExchange,
+            TransactionKindDto::StockSplit => Self::StockSplit,
+            TransactionKindDto::StockDividend => Self::StockDividend,
         }
     }
 }
@@ -65,7 +73,11 @@ impl From<TransactionKind> for TransactionKindDto {
             TransactionKind::Interest => Self::Interest,
             TransactionKind::Fee => Self::Fee,
             TransactionKind::Tax => Self::Tax,
+            TransactionKind::TaxReturn => Self::TaxReturn,
             TransactionKind::CashTransfer => Self::CashTransfer,
+            TransactionKind::FxExchange => Self::FxExchange,
+            TransactionKind::StockSplit => Self::StockSplit,
+            TransactionKind::StockDividend => Self::StockDividend,
         }
     }
 }
@@ -76,15 +88,30 @@ impl From<TransactionKind> for TransactionKindDto {
 /// - `OPENING_CASH`: `cash_account_id`, `amount` (signed starting balance).
 /// - `BUY` / `SELL`: `instrument_id`, `quantity`, `price`; optional `fee`, `tax`
 ///   (default 0) and `cash_account_id` (must use the instrument's quote currency).
-/// - `DEPOSIT` / `WITHDRAWAL` / `FEE` / `TAX`: `cash_account_id`, `amount`
-///   (> 0). A deposit adds to the account; the others take from it.
+/// - `DEPOSIT` / `WITHDRAWAL` / `FEE` / `TAX` / `TAX_RETURN`: `cash_account_id`,
+///   `amount` (> 0). A deposit or tax return adds to the account; the others
+///   take from it.
 /// - `DIVIDEND`: `instrument_id`, `amount` (gross, > 0); optional `fee`, `tax`
 ///   (withheld, default 0) and `cash_account_id` (credited with the net amount;
 ///   must use the instrument's quote currency).
 /// - `INTEREST`: `cash_account_id`, `amount` (gross, > 0); optional `fee`, `tax`.
 ///   The account is credited with the net amount.
 /// - `CASH_TRANSFER`: `cash_account_id` (source), `destination_cash_account_id`
-///   (another account in the same currency), `amount` (> 0).
+///   (another account in the same currency), `amount` (> 0); optional `fee`,
+///   paid by the source on top of `amount`.
+/// - `FX_EXCHANGE`: `cash_account_id` (source), `amount` (spent, > 0),
+///   `destination_cash_account_id` (an account in another currency),
+///   `destination_amount` (received, > 0); optional `fee` in the source
+///   currency, paid on top of `amount`. The executed rate is the ratio of the
+///   two amounts.
+/// - `STOCK_SPLIT`: `instrument_id`, `ratio` (`new:old`, e.g. `4:1`, or `1:3`
+///   for a reverse split). Total cost is unchanged.
+/// - `STOCK_DIVIDEND`: `instrument_id`, `quantity` (shares received), spread
+///   over the open lots at no cost.
+/// - Cash in lieu, for `STOCK_SPLIT` and `STOCK_DIVIDEND`: optional
+///   `cash_in_lieu_quantity` (fractional shares, after the action) with
+///   `amount` (cash received), and optionally `cash_account_id`. The fraction
+///   is disposed of through FIFO, realizing profit or loss.
 ///
 /// For `DIVIDEND` and `INTEREST`, `fee` + `tax` must not exceed `amount`.
 /// Fields not listed for a kind are rejected.
@@ -98,10 +125,16 @@ pub struct TransactionRequest {
     pub sort_order: Option<i32>,
     pub instrument_id: Option<Uuid>,
     pub cash_account_id: Option<Uuid>,
-    /// The receiving account of a `CASH_TRANSFER`.
+    /// The receiving account of a `CASH_TRANSFER` or `FX_EXCHANGE`.
     pub destination_cash_account_id: Option<Uuid>,
     #[schema(example = "100", pattern = r"^\d{1,15}(\.\d{1,8})?$")]
     pub quantity: Option<String>,
+    /// A `STOCK_SPLIT` ratio, `new:old`.
+    #[schema(
+        example = "4:1",
+        pattern = r"^\d{1,15}(\.\d{1,8})?:\d{1,15}(\.\d{1,8})?$"
+    )]
+    pub ratio: Option<String>,
     #[schema(example = "35.25", pattern = r"^\d{1,15}(\.\d{1,8})?$")]
     pub price: Option<String>,
     #[schema(example = "15.50", pattern = r"^\d{1,15}(\.\d{1,8})?$")]
@@ -110,6 +143,12 @@ pub struct TransactionRequest {
     pub tax: Option<String>,
     #[schema(example = "1000.00", pattern = r"^-?\d{1,15}(\.\d{1,8})?$")]
     pub amount: Option<String>,
+    /// The amount an `FX_EXCHANGE` receives, in the destination currency.
+    #[schema(example = "82.00", pattern = r"^\d{1,15}(\.\d{1,8})?$")]
+    pub destination_amount: Option<String>,
+    /// Fractional shares a `STOCK_SPLIT` or `STOCK_DIVIDEND` paid out in cash.
+    #[schema(example = "0.5", pattern = r"^\d{1,15}(\.\d{1,8})?$")]
+    pub cash_in_lieu_quantity: Option<String>,
     #[schema(max_length = 500)]
     pub note: Option<String>,
 }
@@ -123,10 +162,13 @@ impl TransactionRequest {
             cash_account_id: self.cash_account_id,
             destination_cash_account_id: self.destination_cash_account_id,
             quantity: self.quantity.as_deref(),
+            ratio: self.ratio.as_deref(),
             price: self.price.as_deref(),
             fee: self.fee.as_deref(),
             tax: self.tax.as_deref(),
             amount: self.amount.as_deref(),
+            destination_amount: self.destination_amount.as_deref(),
+            cash_in_lieu_quantity: self.cash_in_lieu_quantity.as_deref(),
             note: self.note.as_deref(),
         }
     }
@@ -146,10 +188,13 @@ pub struct TransactionResponse {
     pub cash_account_id: Option<Uuid>,
     pub destination_cash_account_id: Option<Uuid>,
     pub quantity: Option<String>,
+    pub ratio: Option<String>,
     pub price: Option<String>,
     pub fee: Option<String>,
     pub tax: Option<String>,
     pub amount: Option<String>,
+    pub destination_amount: Option<String>,
+    pub cash_in_lieu_quantity: Option<String>,
     pub note: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
@@ -180,10 +225,13 @@ impl From<LedgerEntry> for TransactionResponse {
             cash_account_id: e.cash_account_id,
             destination_cash_account_id: e.destination_cash_account_id,
             quantity: e.quantity,
+            ratio: e.ratio,
             price: e.price,
             fee: e.fee,
             tax: e.tax,
             amount: e.amount,
+            destination_amount: e.destination_amount,
+            cash_in_lieu_quantity: e.cash_in_lieu_quantity,
             note: e.note,
             created_at: e.created_at,
             updated_at: e.updated_at,
@@ -241,7 +289,7 @@ pub struct ListTransactionsQuery {
         (status = UNAUTHORIZED, description = "No valid session", body = ProblemDetails, content_type = "application/problem+json"),
         (status = FORBIDDEN, description = "Missing or invalid CSRF token, or untrusted origin", body = ProblemDetails, content_type = "application/problem+json"),
         (status = NOT_FOUND, description = "No such portfolio for this user", body = ProblemDetails, content_type = "application/problem+json"),
-        (status = CONFLICT, description = "Portfolio archived (`portfolio_archived`) or holdings would go negative (`insufficient_holdings`)", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = CONFLICT, description = "Portfolio archived (`portfolio_archived`), holdings would go negative (`insufficient_holdings`), or a split or stock dividend has no holding to adjust (`no_holdings`)", body = ProblemDetails, content_type = "application/problem+json"),
         (status = UNSUPPORTED_MEDIA_TYPE, description = "Body is not JSON", body = ProblemDetails, content_type = "application/problem+json"),
         (status = UNPROCESSABLE_ENTITY, description = "Invalid fields or references", body = ProblemDetails, content_type = "application/problem+json"),
     ),
@@ -356,7 +404,7 @@ pub async fn get(
         (status = UNAUTHORIZED, description = "No valid session", body = ProblemDetails, content_type = "application/problem+json"),
         (status = FORBIDDEN, description = "Missing or invalid CSRF token, or untrusted origin", body = ProblemDetails, content_type = "application/problem+json"),
         (status = NOT_FOUND, description = "No such portfolio or transaction for this user", body = ProblemDetails, content_type = "application/problem+json"),
-        (status = CONFLICT, description = "Portfolio archived (`portfolio_archived`) or holdings would go negative (`insufficient_holdings`)", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = CONFLICT, description = "Portfolio archived (`portfolio_archived`), holdings would go negative (`insufficient_holdings`), or a split or stock dividend has no holding to adjust (`no_holdings`)", body = ProblemDetails, content_type = "application/problem+json"),
         (status = UNSUPPORTED_MEDIA_TYPE, description = "Body is not JSON", body = ProblemDetails, content_type = "application/problem+json"),
         (status = UNPROCESSABLE_ENTITY, description = "Invalid fields or references", body = ProblemDetails, content_type = "application/problem+json"),
     ),
@@ -395,7 +443,7 @@ pub async fn replace(
         (status = UNAUTHORIZED, description = "No valid session", body = ProblemDetails, content_type = "application/problem+json"),
         (status = FORBIDDEN, description = "Missing or invalid CSRF token, or untrusted origin", body = ProblemDetails, content_type = "application/problem+json"),
         (status = NOT_FOUND, description = "No such portfolio or transaction for this user", body = ProblemDetails, content_type = "application/problem+json"),
-        (status = CONFLICT, description = "Portfolio archived (`portfolio_archived`) or holdings would go negative (`insufficient_holdings`)", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = CONFLICT, description = "Portfolio archived (`portfolio_archived`), holdings would go negative (`insufficient_holdings`), or a split or stock dividend has no holding to adjust (`no_holdings`)", body = ProblemDetails, content_type = "application/problem+json"),
     ),
 )]
 pub async fn delete(
