@@ -13,6 +13,8 @@ pub struct Model {
     pub sort_order: i32,
     pub instrument_id: Option<Uuid>,
     pub cash_account_id: Option<Uuid>,
+    /// The receiving account of a cash transfer (P4).
+    pub destination_cash_account_id: Option<Uuid>,
     pub quantity: Option<String>,
     pub price: Option<String>,
     pub fee: Option<String>,

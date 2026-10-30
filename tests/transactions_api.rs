@@ -420,7 +420,7 @@ async fn create_enforces_required_and_forbidden_fields_per_kind() {
 
     for malformed in [
         json!({
-            "kind": "DIVIDEND",
+            "kind": "SPIN_OFF",
             "trade_date": "2026-01-01",
         }),
         json!({
@@ -1086,5 +1086,29 @@ async fn openapi_documents_all_transaction_operations_security_and_csrf() {
             .iter()
             .any(|p| p["name"] == "X-CSRF-Token" && p["in"] == "header");
         assert_eq!(has_csrf, requires_csrf, "operation: {op}");
+    }
+
+    let schemas = &response.body["components"]["schemas"];
+    assert_eq!(
+        schemas["TransactionKindDto"]["enum"],
+        json!([
+            "OPENING_POSITION",
+            "OPENING_CASH",
+            "BUY",
+            "SELL",
+            "DEPOSIT",
+            "WITHDRAWAL",
+            "DIVIDEND",
+            "INTEREST",
+            "FEE",
+            "TAX",
+            "CASH_TRANSFER"
+        ])
+    );
+    for schema in ["TransactionRequest", "TransactionResponse"] {
+        assert!(
+            schemas[schema]["properties"]["destination_cash_account_id"].is_object(),
+            "{schema}"
+        );
     }
 }

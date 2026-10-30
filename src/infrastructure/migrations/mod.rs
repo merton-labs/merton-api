@@ -9,6 +9,7 @@ mod m20261024_000003_create_portfolios;
 mod m20261024_000004_create_instruments;
 mod m20261024_000005_create_cash_accounts;
 mod m20261024_000006_create_ledger;
+mod m20261030_000007_add_transfer_destination;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait, async_trait};
 
@@ -24,6 +25,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261024_000004_create_instruments::Migration),
             Box::new(m20261024_000005_create_cash_accounts::Migration),
             Box::new(m20261024_000006_create_ledger::Migration),
+            Box::new(m20261030_000007_add_transfer_destination::Migration),
         ]
     }
 }

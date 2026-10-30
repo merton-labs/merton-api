@@ -115,6 +115,7 @@ fn active(model: transaction::Model) -> transaction::ActiveModel {
         sort_order: Set(model.sort_order),
         instrument_id: Set(model.instrument_id),
         cash_account_id: Set(model.cash_account_id),
+        destination_cash_account_id: Set(model.destination_cash_account_id),
         quantity: Set(model.quantity),
         price: Set(model.price),
         fee: Set(model.fee),

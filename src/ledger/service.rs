@@ -4,7 +4,7 @@
 //!
 //! 1. lock the owned, `ACTIVE` portfolio with a guarded write;
 //! 2. check that the referenced instrument belongs to the caller and the
-//!    cash account to this portfolio, with matching currencies;
+//!    cash accounts to this portfolio, with matching currencies;
 //! 3. write the transaction and rewrite its movements;
 //! 4. replay FIFO for every affected instrument and reject the change if a
 //!    holding would go negative anywhere in history (ADR-LEDG-04/09);
@@ -42,6 +42,7 @@ pub struct LedgerEntry {
     pub sort_order: i32,
     pub instrument_id: Option<Uuid>,
     pub cash_account_id: Option<Uuid>,
+    pub destination_cash_account_id: Option<Uuid>,
     pub quantity: Option<String>,
     pub price: Option<String>,
     pub fee: Option<String>,
@@ -241,9 +242,10 @@ where
     }
 }
 
-/// The instrument must belong to the caller; the cash account must belong to
-/// this portfolio and, for a trade, use the instrument's quote currency (no
-/// FX in P3). Missing and foreign references get the same message.
+/// The instrument must belong to the caller and the cash accounts to this
+/// portfolio. A cash account used with an instrument must be in its quote
+/// currency, and a transfer stays within one currency (FX is a separate
+/// transaction kind). Missing and foreign references get the same message.
 async fn check_references(
     txn: &DatabaseTransaction,
     owner: UserId,
@@ -264,26 +266,43 @@ async fn check_references(
         }
         None => None,
     };
-    if let Some(id) = valid.cash_account_id() {
+    let mut accounts = Vec::new();
+    for (field, id) in [
+        ("cash_account_id", valid.cash_account_id()),
+        (
+            "destination_cash_account_id",
+            valid.destination_cash_account_id(),
+        ),
+    ] {
+        let Some(id) = id else { continue };
         match cash_accounts::find(txn, owner, portfolio_id, id).await? {
             None => errors.push(FieldError {
-                field: "cash_account_id",
+                field,
                 message: "does not refer to a cash account in this portfolio".to_owned(),
             }),
-            Some(account) => {
-                if let (Details::Trade { .. }, Some(instrument)) = (&valid.details, &instrument)
-                    && account.currency != instrument.quote_currency
-                {
-                    errors.push(FieldError {
-                        field: "cash_account_id",
-                        message: format!(
-                            "is in {} but the instrument is quoted in {}",
-                            account.currency, instrument.quote_currency
-                        ),
-                    });
-                }
-            }
+            Some(account) => accounts.push((field, account)),
         }
+    }
+    match (accounts.as_slice(), &instrument) {
+        ([(field, account)], Some(instrument)) if account.currency != instrument.quote_currency => {
+            errors.push(FieldError {
+                field,
+                message: format!(
+                    "is in {} but the instrument is quoted in {}",
+                    account.currency, instrument.quote_currency
+                ),
+            });
+        }
+        ([(_, source), (field, destination)], _) if source.currency != destination.currency => {
+            errors.push(FieldError {
+                field,
+                message: format!(
+                    "is in {} but the source account is in {}",
+                    destination.currency, source.currency
+                ),
+            });
+        }
+        _ => {}
     }
     if errors.is_empty() {
         Ok(())
@@ -297,12 +316,9 @@ async fn post_movements(
     model: &transaction::Model,
     valid: &ValidTransaction,
 ) -> Result<(), LedgerError> {
-    let effects = valid.effects().map_err(|message| {
-        LedgerError::Validation(vec![FieldError {
-            field: "quantity",
-            message,
-        }])
-    })?;
+    let effects = valid
+        .effects()
+        .map_err(|error| LedgerError::Validation(vec![error]))?;
     if let Some(position) = effects.position {
         let (kind, quantity) = if position.quantity_delta.is_sign_negative() {
             (DISPOSE, -position.quantity_delta)
@@ -323,7 +339,7 @@ async fn post_movements(
         )
         .await?;
     }
-    if let Some(cash) = effects.cash {
+    for cash in effects.cash {
         repository::insert_cash_movement(
             txn,
             cash_movement::Model {
@@ -402,6 +418,7 @@ fn to_model(
         sort_order: valid.sort_order,
         instrument_id: valid.instrument_id(),
         cash_account_id: valid.cash_account_id(),
+        destination_cash_account_id: valid.destination_cash_account_id(),
         quantity: None,
         price: None,
         fee: None,
@@ -421,6 +438,16 @@ fn to_model(
             model.amount = text(cost_basis);
         }
         Details::OpeningCash { amount, .. } => model.amount = text(amount),
+        Details::CashFlow { amount, .. } | Details::CashTransfer { amount, .. } => {
+            model.amount = text(amount);
+        }
+        Details::Income {
+            gross, fee, tax, ..
+        } => {
+            model.amount = text(gross);
+            model.fee = text(fee);
+            model.tax = text(tax);
+        }
         Details::Trade {
             quantity,
             price,
@@ -446,6 +473,7 @@ fn to_entry(model: transaction::Model) -> Result<LedgerEntry, LedgerError> {
         sort_order: model.sort_order,
         instrument_id: model.instrument_id,
         cash_account_id: model.cash_account_id,
+        destination_cash_account_id: model.destination_cash_account_id,
         quantity: model.quantity,
         price: model.price,
         fee: model.fee,

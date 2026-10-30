@@ -25,6 +25,13 @@ pub enum TransactionKindDto {
     OpeningCash,
     Buy,
     Sell,
+    Deposit,
+    Withdrawal,
+    Dividend,
+    Interest,
+    Fee,
+    Tax,
+    CashTransfer,
 }
 
 impl From<TransactionKindDto> for TransactionKind {
@@ -34,6 +41,13 @@ impl From<TransactionKindDto> for TransactionKind {
             TransactionKindDto::OpeningCash => Self::OpeningCash,
             TransactionKindDto::Buy => Self::Buy,
             TransactionKindDto::Sell => Self::Sell,
+            TransactionKindDto::Deposit => Self::Deposit,
+            TransactionKindDto::Withdrawal => Self::Withdrawal,
+            TransactionKindDto::Dividend => Self::Dividend,
+            TransactionKindDto::Interest => Self::Interest,
+            TransactionKindDto::Fee => Self::Fee,
+            TransactionKindDto::Tax => Self::Tax,
+            TransactionKindDto::CashTransfer => Self::CashTransfer,
         }
     }
 }
@@ -45,6 +59,13 @@ impl From<TransactionKind> for TransactionKindDto {
             TransactionKind::OpeningCash => Self::OpeningCash,
             TransactionKind::Buy => Self::Buy,
             TransactionKind::Sell => Self::Sell,
+            TransactionKind::Deposit => Self::Deposit,
+            TransactionKind::Withdrawal => Self::Withdrawal,
+            TransactionKind::Dividend => Self::Dividend,
+            TransactionKind::Interest => Self::Interest,
+            TransactionKind::Fee => Self::Fee,
+            TransactionKind::Tax => Self::Tax,
+            TransactionKind::CashTransfer => Self::CashTransfer,
         }
     }
 }
@@ -55,7 +76,17 @@ impl From<TransactionKind> for TransactionKindDto {
 /// - `OPENING_CASH`: `cash_account_id`, `amount` (signed starting balance).
 /// - `BUY` / `SELL`: `instrument_id`, `quantity`, `price`; optional `fee`, `tax`
 ///   (default 0) and `cash_account_id` (must use the instrument's quote currency).
+/// - `DEPOSIT` / `WITHDRAWAL` / `FEE` / `TAX`: `cash_account_id`, `amount`
+///   (> 0). A deposit adds to the account; the others take from it.
+/// - `DIVIDEND`: `instrument_id`, `amount` (gross, > 0); optional `fee`, `tax`
+///   (withheld, default 0) and `cash_account_id` (credited with the net amount;
+///   must use the instrument's quote currency).
+/// - `INTEREST`: `cash_account_id`, `amount` (gross, > 0); optional `fee`, `tax`.
+///   The account is credited with the net amount.
+/// - `CASH_TRANSFER`: `cash_account_id` (source), `destination_cash_account_id`
+///   (another account in the same currency), `amount` (> 0).
 ///
+/// For `DIVIDEND` and `INTEREST`, `fee` + `tax` must not exceed `amount`.
 /// Fields not listed for a kind are rejected.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +98,8 @@ pub struct TransactionRequest {
     pub sort_order: Option<i32>,
     pub instrument_id: Option<Uuid>,
     pub cash_account_id: Option<Uuid>,
+    /// The receiving account of a `CASH_TRANSFER`.
+    pub destination_cash_account_id: Option<Uuid>,
     #[schema(example = "100", pattern = r"^\d{1,15}(\.\d{1,8})?$")]
     pub quantity: Option<String>,
     #[schema(example = "35.25", pattern = r"^\d{1,15}(\.\d{1,8})?$")]
@@ -88,6 +121,7 @@ impl TransactionRequest {
             sort_order: self.sort_order,
             instrument_id: self.instrument_id,
             cash_account_id: self.cash_account_id,
+            destination_cash_account_id: self.destination_cash_account_id,
             quantity: self.quantity.as_deref(),
             price: self.price.as_deref(),
             fee: self.fee.as_deref(),
@@ -110,6 +144,7 @@ pub struct TransactionResponse {
     pub sort_order: i32,
     pub instrument_id: Option<Uuid>,
     pub cash_account_id: Option<Uuid>,
+    pub destination_cash_account_id: Option<Uuid>,
     pub quantity: Option<String>,
     pub price: Option<String>,
     pub fee: Option<String>,
@@ -143,6 +178,7 @@ impl From<LedgerEntry> for TransactionResponse {
             sort_order: e.sort_order,
             instrument_id: e.instrument_id,
             cash_account_id: e.cash_account_id,
+            destination_cash_account_id: e.destination_cash_account_id,
             quantity: e.quantity,
             price: e.price,
             fee: e.fee,
