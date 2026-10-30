@@ -234,7 +234,9 @@ address. Serve the public site over HTTPS and keep `SESSION_COOKIE_SECURE=true`.
   stored. Sessions expire after 7 days idle or 30 days total, enforced on the
   server. Activity extends the idle window at most once every 15 minutes, to
   avoid a database write per request. Logging out revokes the session, and
-  logging in revokes any session the browser already presented.
+  logging in revokes any session the browser already presented. Sessions
+  that expired or were revoked more than a day ago are deleted at startup and
+  then every hour.
 - **CSRF**: register, login and logout require a trusted `Origin` (or a
   same-origin `Sec-Fetch-Site`; clients that send neither are not browsers).
   Logout additionally requires `X-CSRF-Token`: an HMAC-SHA256 of the session id
@@ -275,10 +277,9 @@ address. Serve the public site over HTTPS and keep `SESSION_COOKIE_SECURE=true`.
   CPU, not availability against a large distributed attacker.
 - `X-Forwarded-For` is honoured only from exact `TRUSTED_PROXIES` addresses
   (no CIDR ranges).
-- There is no account recovery or password reset yet. This is a required
-  follow-up for self-hosted operation; until then an operator must manage
-  accounts directly in the database.
-- Expired and revoked session rows are not purged automatically yet.
+- There is no account recovery or password reset in the MVP (owner
+  decision, ADR-AUTH-10). An operator must manage accounts directly in the
+  database.
 - Registration reveals whether an email is already registered (`409`), as
   required by the API contract.
 

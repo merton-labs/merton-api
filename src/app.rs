@@ -2,11 +2,15 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use sea_orm::{DatabaseConnection, DbErr};
 use sea_orm_migration::MigratorTrait;
+use time::OffsetDateTime;
 use tokio::net::TcpListener;
+use tokio::time::MissedTickBehavior;
 
+use crate::auth;
 use crate::auth::csrf::{CsrfKey, InvalidKey};
 use crate::auth::password::HashLimiter;
 use crate::auth::rate_limit::LoginRateLimiter;
@@ -14,6 +18,9 @@ use crate::config::{Config, SecurityConfig};
 use crate::http;
 use crate::infrastructure::database;
 use crate::infrastructure::migrations::Migrator;
+
+/// Time between purges of ended sessions.
+const SESSION_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -102,16 +109,34 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
 
     let state = AppState::new(db.clone(), &config.security)?;
     let router = http::router(state).into_make_service_with_connect_info::<SocketAddr>();
-    axum::serve(listener, router)
+    let session_purge = tokio::spawn(purge_sessions_periodically(db.clone()));
+    let served = axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .map_err(ServerError::Serve)?;
+        .map_err(ServerError::Serve);
+    session_purge.abort();
+    served?;
 
     if let Err(err) = db.close().await {
         tracing::warn!(error = %err, "failed to close database connections");
     }
     tracing::info!("shutdown complete");
     Ok(())
+}
+
+/// Purges ended sessions at startup and then every
+/// [`SESSION_PURGE_INTERVAL`] until aborted (ADR-AUTH-11).
+async fn purge_sessions_periodically(db: DatabaseConnection) {
+    let mut ticks = tokio::time::interval(SESSION_PURGE_INTERVAL);
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        ticks.tick().await;
+        match auth::service::purge_ended_sessions(&db, OffsetDateTime::now_utc()).await {
+            Ok(0) => {}
+            Ok(deleted) => tracing::info!(deleted, "purged ended sessions"),
+            Err(err) => tracing::warn!(error = %err, "failed to purge ended sessions"),
+        }
+    }
 }
 
 /// Resolves on Ctrl+C or, on Unix, SIGTERM.
