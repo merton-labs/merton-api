@@ -134,3 +134,16 @@ pub(crate) async fn delete_all_in_portfolio(
         .await?;
     Ok(result.rows_affected)
 }
+
+/// Every account of an owned portfolio, in creation order.
+pub async fn all_in_portfolio(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    portfolio_id: Uuid,
+) -> Result<Vec<cash_account::Model>, DbErr> {
+    in_owned_portfolio(owner, portfolio_id)
+        .order_by_asc(Column::CreatedAt)
+        .order_by_asc(Column::Id)
+        .all(db)
+        .await
+}

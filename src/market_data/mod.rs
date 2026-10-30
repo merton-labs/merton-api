@@ -33,7 +33,7 @@ impl Source {
         }
     }
 
-    fn from_db(value: &str) -> Result<Self, DbErr> {
+    pub(crate) fn from_db(value: &str) -> Result<Self, DbErr> {
         match value {
             "MANUAL" => Ok(Self::Manual),
             "IMPORT" => Ok(Self::Import),

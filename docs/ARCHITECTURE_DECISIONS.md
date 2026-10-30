@@ -93,6 +93,17 @@ Every decision uses the same fields:
 - **Status:** Accepted · **Source:** Owner · **Phases:** all
 - **Decision:** Apache License 2.0 ([`../LICENSE`](../LICENSE)).
 
+### ADR-SCOPE-08 — Snowball Analytics as the behavioural reference
+- **Status:** Accepted · **Source:** Owner (2026-10-30) · **Phases:** all
+- **Decision:** when a financial behaviour is not yet decided and Snowball
+  Analytics documents how it works, follow Snowball. Where it documents
+  nothing, the implementer proposes a rule and the owner confirms it.
+- **Consequences:**
+  - Each ADR that applies this rule cites the Snowball page it follows,
+    or says that Snowball documents nothing on the point.
+  - The rule does not override Accepted decisions, the MVP exclusions
+    (ADR-SCOPE-05), or the precision rules (ADR-NUM-01 … NUM-05).
+
 ---
 
 ## 2. Technology stack
@@ -1260,6 +1271,42 @@ Every decision uses the same fields:
   - An instrument with prices cannot be deleted (`409 instrument_in_use`).
   - Another user's instrument, price or rate is `404`.
 
+### ADR-VAL-07 — Valuation details (P5)
+- **Status:** Accepted · **Source:** Owner (2026-10-30), Implementation (P5) · **Phases:** P5
+- **Context:** these details apply the accepted rules (ADR-VAL-01 … VAL-06,
+  ADR-NUM-05) where those rules leave a choice open.
+- **API:** `GET /api/v1/portfolios/{id}/holdings`, `/valuation` and
+  `/allocation`, each with a required `as_of` (`422` when missing). They
+  work on archived portfolios.
+- **Holdings:**
+  - FIFO is replayed over movements dated on or before `as_of`. The ledger
+    keeps every prefix of history valid, so the replay cannot fail.
+  - Closed positions (quantity 0) are left out.
+  - Every cash account is listed, even with a zero balance.
+  - Cost basis is the open lots' cost in the quote currency (ADR-LEDG-10).
+- **Values:**
+  - `market_value` (quantity × price, quote currency) is exact.
+  - Each base-currency `value` is rounded once to 8 places.
+  - **Totals** are exact sums of those rounded values, so items always add
+    up to the totals.
+  - **Zero cash balance:** valued at exactly 0 without needing a rate.
+- **Unvalued reasons:** `MISSING_PRICE`, `MISSING_FX_RATE`, and
+  `OUT_OF_RANGE` (an exact value too large to represent). They appear on
+  the item and in a separate `unvalued` list. A total too large to
+  represent is `422` on `as_of`.
+- **Allocation:**
+  - The classes are the instrument asset classes plus `CASH`; only classes
+    with a valued asset are listed.
+  - Percentages are over the valued Net Portfolio Value. A partial
+    valuation gives `partial: true` rather than hiding them.
+  - `negative_cash` is true when any cash account is overdrawn at `as_of`.
+- **Snowball Analytics (ADR-SCOPE-08):** Snowball values a portfolio as
+  holdings (price × quantity) plus cash, which matches the above
+  ([key portfolio indicators](https://help.snowball-analytics.com/review-of-key-portfolio-indicators/)).
+  It documents no rules for rounding, missing prices or allocation with
+  negative cash, so the details above were proposed here and accepted by
+  the owner.
+
 ---
 
 ## 14. CSV import and export
@@ -1382,7 +1429,7 @@ Every decision uses the same fields:
 | ADR-LEDG-02 | Confirm the P4 schema: `destination_cash_account_id`, `destination_amount`, `ratio`, `cash_in_lieu_quantity`, and the `SPLIT`/`STOCK_DIVIDEND` movements (implemented provisionally) | Confirmation only |
 | ADR-TXN-07 | Review the corporate-action rules chosen under the owner's delegation (`new:old` ratio, proportional lots, 8-place rounding, residual to the last lot, cash in lieu through FIFO). Owner could not judge them on 2026-10-30. | Confirmation only |
 | ADR-NUM-05 | Confirm the P4 rounding (holdings to 8 places after splits) | Confirmation only |
-| ADR-CSV-02 | Import staging model | P6 |
+| ADR-CSV-02 | Import staging model | P6 (deferred by the owner until the rest of the MVP is done) |
 | ADR-AUTH-10 | Account recovery | Before production use |
 | ADR-AUTH-11 | Expired session cleanup | Before production use |
 | — | Performance limits for large ledger replay | P3/P5 |

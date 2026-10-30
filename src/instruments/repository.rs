@@ -132,3 +132,12 @@ pub async fn delete(db: &impl ConnectionTrait, owner: UserId, id: Uuid) -> Resul
         .await?;
     Ok(result.rows_affected)
 }
+
+/// The owner's instruments among `ids`; others are left out.
+pub async fn find_many(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    ids: Vec<Uuid>,
+) -> Result<Vec<instrument::Model>, DbErr> {
+    owned(owner).filter(Column::Id.is_in(ids)).all(db).await
+}

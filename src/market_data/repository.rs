@@ -299,3 +299,36 @@ pub async fn delete_fx_rate(
         .await?;
     Ok(result.rows_affected)
 }
+
+// --- Lookups for valuation ----------------------------------------------------
+
+/// The instrument's latest price on or before `as_of`.
+pub async fn latest_price(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    instrument_id: Uuid,
+    as_of: Date,
+) -> Result<Option<instrument_price::Model>, DbErr> {
+    prices_of_owned(owner, instrument_id)
+        .filter(price::Column::PriceDate.lte(as_of))
+        .order_by_desc(price::Column::PriceDate)
+        .one(db)
+        .await
+}
+
+/// The owner's latest `base`/`quote` rate on or before `as_of`.
+pub async fn latest_fx_rate(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    base_currency: &str,
+    quote_currency: &str,
+    as_of: Date,
+) -> Result<Option<fx_rate::Model>, DbErr> {
+    rates_of(owner)
+        .filter(rate::Column::BaseCurrency.eq(base_currency))
+        .filter(rate::Column::QuoteCurrency.eq(quote_currency))
+        .filter(rate::Column::RateDate.lte(as_of))
+        .order_by_desc(rate::Column::RateDate)
+        .one(db)
+        .await
+}

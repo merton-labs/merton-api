@@ -35,7 +35,7 @@ impl AssetClass {
         }
     }
 
-    fn from_db(value: &str) -> Result<Self, DbErr> {
+    pub(crate) fn from_db(value: &str) -> Result<Self, DbErr> {
         match value {
             "STOCK" => Ok(Self::Stock),
             "ETF" => Ok(Self::Etf),
