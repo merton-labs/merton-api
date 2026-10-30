@@ -8,8 +8,8 @@ Backend for **Merton**, an open-source, self-hosted, multi-user investment portf
 > with FIFO validation, deposits, withdrawals, dividends, interest, fees,
 > taxes and tax returns, cash transfers, FX exchanges, stock splits and
 > stock dividends) are implemented, along with manually entered
-> historical prices and FX rates. Valuation and CSV import are not built
-> yet. See
+> historical prices and FX rates, and holdings, valuation and allocation
+> at any date. CSV import and export are not built yet. See
 > [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the roadmap and
 > [CLAUDE.md](CLAUDE.md) for contributor rules.
 
@@ -93,6 +93,9 @@ automatically before the server starts accepting requests.
 | GET    | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie | Get a transaction |
 | PUT    | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie + CSRF | Replace a transaction; history is re-validated |
 | DELETE | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie + CSRF | Delete a transaction; history is re-validated |
+| GET    | `/api/v1/portfolios/{id}/holdings?as_of=` | cookie | Open positions (quantity, cost basis) and cash balances at a date |
+| GET    | `/api/v1/portfolios/{id}/valuation?as_of=` | cookie | Value in the base currency, with the price and FX rate used for each asset |
+| GET    | `/api/v1/portfolios/{id}/allocation?as_of=` | cookie | Signed allocation by asset class on Net Portfolio Value |
 
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 (`application/problem+json`) with a stable `code` field, for example
@@ -112,6 +115,27 @@ fetched automatically. A price is in its instrument's quote currency and
 may be zero; a rate must be greater than zero. Market FX rates are separate
 from the amounts recorded by `FX_EXCHANGE` transactions. An instrument with
 prices cannot be deleted (`409 instrument_in_use`).
+
+### Valuation
+
+- **On request, for a date:** `as_of` is required. Only transactions,
+  prices and rates dated on or before it are used, and nothing is stored.
+- **Prices and rates:** each asset uses the latest price on or before
+  `as_of`. To convert, valuation uses the latest of the direct rate
+  (USD/THB) and the inverse one (THB/USD); the direct rate wins a tie.
+  There is no triangulation through a third currency.
+- **Staleness:** a price older than 7 days, or a rate older than 3, is
+  flagged `stale` but still used.
+- **Missing data:** an asset without a price or rate is never valued at
+  zero. It is listed under `unvalued` with a reason, left out of the
+  totals, and the result is marked `partial`.
+- **Rounding:** values are exact until each base-currency value, which is
+  rounded half-to-even to 8 places. Totals add those values exactly.
+  Allocation percentages have 4 places and may not add up to exactly 100.
+- **Allocation:** signed, on Net Portfolio Value. Stocks of 10,000 with
+  cash of −2,000 give 125% and −25%; percentages are `null` when the Net
+  Portfolio Value is zero or negative. Overdrawn cash is flagged, not
+  treated as a margin loan.
 
 ### Ledger
 
@@ -304,6 +328,7 @@ src/
 ├── cash_accounts/       # Cash accounts, owned through their portfolio
 ├── ledger/              # Decimals, FIFO, transactions and their movements
 ├── market_data/         # Historical instrument prices and FX rates
+├── valuation/           # Holdings, valuation and allocation at a date
 ├── validation.rs        # Shared value types (names, currency codes)
 ├── pagination.rs        # Shared limit/offset paging
 ├── http/                # Router, handlers, extractors, errors, OpenAPI

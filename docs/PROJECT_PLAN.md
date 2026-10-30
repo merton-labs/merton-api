@@ -36,8 +36,8 @@ separate repository.
 | P2A (portfolios) | Completed (`c5e812d`, CI green; some decisions provisional) |
 | P2B (instruments, cash accounts) | Completed (`04bb1b9`, CI green; some decisions provisional) |
 | P3 (ledger, FIFO) | Completed (`fc538e1`, CI green; decisions provisional, see §17) |
-| P4 (financial transactions, corporate actions) | Completed (committed locally in two commits, not yet pushed or run in CI; some rules provisional, see §17) |
-| P5 (valuation, FX, allocation) | In progress: price and FX-rate storage done (committed, in a pull request with P4); valuation next |
+| P4 (financial transactions, corporate actions) | Completed (PR #1, merge `725023d`, CI green (run 41078791140); some rules provisional, see §17) |
+| P5 (valuation, FX, allocation) | Completed: storage in PR #1; holdings, valuation and allocation in a second pull request |
 
 ## 2. Product Goals
 
@@ -401,9 +401,9 @@ ADR-API-01 … API-06:
 | **P2A** | Portfolio CRUD & Ownership | ✅ Completed (`c5e812d`, CI green) |
 | **P2B** | Instruments & Cash Accounts | ✅ Completed (`04bb1b9`, CI green) |
 | **P3** | Transaction Ledger & FIFO | ✅ Completed (`fc538e1`, CI green) |
-| **P4** | Financial Transactions & Corporate Actions | ✅ Completed (committed locally; record CI once pushed) |
-| **P5** | Valuation, FX & Asset Allocation | ⏳ In progress (price and FX-rate storage done) |
-| **P6** | CSV Import & Export | Not started |
+| **P4** | Financial Transactions & Corporate Actions | ✅ Completed (PR #1, merge `725023d`, CI green (run 41078791140)) |
+| **P5** | Valuation, FX & Asset Allocation | ✅ Completed (step 1 in PR #1; step 2 in a second pull request) |
+| **P6** | CSV Import & Export | Deferred (owner, 2026-10-30) |
 
 Phases are implemented in order. Do not merge phases, and do not pull
 later-phase work forward. The backend MVP is functionally complete only
@@ -426,7 +426,7 @@ flowchart LR
 | P2B ✅ | P2A | Done; provisional choices await confirmation (ADR-INST-04, ADR-PORT-04, ADR-INST-02) |
 | P3 ✅ | P2B | Done; provisional choices await confirmation (ADR-LEDG-02, LEDG-07, LEDG-08, NUM-04, NUM-05) |
 | P4 ✅ | P3 | Done; provisional choices await confirmation (ADR-LEDG-02 schema, ADR-TXN-07 rules, ADR-NUM-05 P4 rounding) |
-| P5 ⏳ | P3, P4 | All decisions answered (ADR-VAL-02, VAL-06, NUM-05 for P5; 2026-10-30) |
+| P5 ✅ | P3, P4 | Done (ADR-VAL-07 accepted 2026-10-30) |
 | P6 | P3, P4, P5 | ADR-CSV-02 staging model |
 
 ## 17. Phase Deliverables
@@ -880,10 +880,10 @@ P2A onward are *Proposed* until they are implemented.
   tax reporting.
 
 ### P5 — Valuation, FX & Asset Allocation
-- **Status:** ⏳ In progress.
-  - **Step 1, price and FX-rate storage:** done, verified locally (all
-    four CI commands, 267 tests) and committed.
-  - **Step 2, holdings, valuation and allocation:** next.
+- **Status:** ✅ Completed.
+  - **Step 1, price and FX-rate storage:** merged (PR #1, merge `725023d`, CI green (run 41078791140)).
+  - **Step 2, holdings, valuation and allocation:** verified locally (all
+    four CI commands, 288 tests), committed and in a pull request.
 - **Objective:** on-demand portfolio valuation in the base currency.
 - **Dependencies:** P3 and P4. Owner decisions (2026-10-30):
   - ADR-VAL-02: a price is stale after 7 days, an FX rate after 3.
@@ -909,6 +909,37 @@ P2A onward are *Proposed* until they are implemented.
       were each caught by a test.
     - A P4 database upgrades through migration 9 (smoke-tested with the
       P4 and P5 binaries; FKs are `RESTRICT`, unique indexes present).
+- **Step 2 delivered:**
+  - `GET /api/v1/portfolios/{id}/holdings`, `/valuation` and
+    `/allocation`, each with a required `as_of`
+  - `src/valuation/`: pure valuation and allocation (`mod.rs`) and the
+    loader (`service.rs`, one read transaction); `src/http/valuation.rs`
+  - `ledger::decimal::mul_round` and `signed_div_round`: exact products
+    and quotients rounded once, half-to-even, symmetric around zero
+  - as-of queries: `ledger::repository::{positions_until, cash_until}`,
+    `market_data::repository::{latest_price, latest_fx_rate}`, all
+    owner-scoped in SQL
+  - details recorded in ADR-VAL-07 (accepted 2026-10-30)
+  - **Tests (21 new: 11 in `tests/valuation.rs`, 10 unit):**
+    - no future leakage of transactions, prices or rates
+    - direct and inverse rates, with the later rate winning and direct
+      winning a tie
+    - no triangulation
+    - staleness thresholds (7 and 3 days are not yet stale)
+    - partial results with reasons, never valued at zero
+    - the 125% / −25% example, and `null` percentages at NPV ≤ 0
+    - 4-place percentages not forced to 100
+    - a base-currency change re-values without touching transactions
+    - archived portfolios, cross-user `404`, another user's rates never
+      used, required `as_of`, OpenAPI
+  - **Evidence:**
+    - 12 mutations (date filters, rate owner, tie rule, staleness
+      boundary, inverse division, NPV ≤ 0, zero cash, closed positions,
+      half-even rounding) were each caught by a test.
+    - A runtime smoke test (`cargo run` plus curl, file database) checked
+      the values by hand: 3 × 510 USD × 35.5 = 54,315 THB, allocation
+      75.4066% / 24.5934%, `422` without `as_of`, `Cache-Control:
+      no-store`.
 - **Scope:**
   - price and FX-rate storage and CRUD
   - holdings and cash balances at `as_of`
@@ -933,7 +964,8 @@ P2A onward are *Proposed* until they are implemented.
 - **Excluded:** automated feeds, benchmarks, performance and risk analytics.
 
 ### P6 — CSV Import & Export
-- **Status:** Not started.
+- **Status:** Not started. Deferred by the owner (2026-10-30) until the
+  rest of the MVP is done.
 - **Objective:** bulk data in and out, safely.
 - **Dependencies:** P3, P4 and P5. Decision ADR-CSV-02 must be made first.
 - **Scope:**
@@ -1002,14 +1034,14 @@ P2A onward are *Proposed* until they are implemented.
 - **P4:**
   - [x] Every MVP transaction type posts correct movements.
   - [x] Corporate-action cost rules hold.
-  - [x] Executed FX is separate from market FX. (No market FX exists yet;
-        P5 must keep it that way.)
+  - [x] Executed FX is separate from market FX. (Valuation reads only
+        the `fx_rates` table, never `FX_EXCHANGE` amounts.)
 - **P5:**
   - [x] Prices and FX rates are user-entered, owner-scoped and exact
         (step 1).
-  - [ ] Valuation at `as_of` uses only data on or before that date.
-  - [ ] Partial results are explicit.
-  - [ ] Allocation is signed, with NPV ≤ 0 giving null.
+  - [x] Valuation at `as_of` uses only data on or before that date.
+  - [x] Partial results are explicit.
+  - [x] Allocation is signed, with NPV ≤ 0 giving null.
 - **P6:**
   - [ ] Imports are atomic and revalidated.
   - [ ] Duplicates go to review.
@@ -1031,7 +1063,7 @@ The strategy is risk-based testing with incremental development (ADR-QA-01).
 | OpenAPI | Assert paths, schemas, security schemes exist | `tests/http.rs` |
 | Migrations | Fresh-DB apply; constraint behaviour | `tests/database.rs` |
 
-Current suite after P5 step 1: **267 tests** (104 unit + 163 integration). All pass.
+Current suite after P5: **288 tests** (114 unit + 174 integration). All pass.
 
 Commands:
 
@@ -1126,7 +1158,9 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
     on 2026-10-30; they stay Proposed.
 14. ~~**ADR-VAL-02:** price and FX staleness threshold.~~ Answered
     2026-10-30: stale after 7 days for prices and 3 days for FX rates.
-15. **ADR-CSV-02:** import staging model.
+15. **ADR-CSV-02:** import staging model. *Deferred 2026-10-30:* the owner
+    put P6 after the rest of the MVP. Recommendation on record: a
+    server-side staging table, with rows expiring after 24 hours.
 16. **Performance:** limits for ledger replay on large portfolios.
 17. **ADR-AUTH-10 / AUTH-11:** account recovery and session cleanup, and
     their timing before production use.
@@ -1141,14 +1175,16 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
     2026-10-30.
 23. ~~**Push access.**~~ Answered 2026-10-30: deliver through a pull
     request instead of pushing to `main`.
+24. ~~**ADR-VAL-07:** the valuation details.~~ Accepted 2026-10-30, with
+    the standing rule to follow Snowball Analytics wherever it documents
+    a behaviour (ADR-SCOPE-08).
 
 ## 23. Current Implementation Status
 
 Verified against the source and the tests. P0–P3 are also verified
-against GitHub Actions (P3: commit `fc538e1`). P4 is verified locally and
-committed as `d3d1c08` (cash transactions) and `988b9f2` (FX and
-corporate actions), and P5 step 1 is committed after them. They reach
-`main` through a pull request; record its CI run here.
+against GitHub Actions (P3: commit `fc538e1`). P4 and P5 step 1 are on
+`main` through PR #1, merge `725023d`, CI green (run 41078791140). P5 step 2 is committed and in a second pull request; record its CI run
+here once it is merged.
 
 | Area | Status | Evidence |
 | --- | --- | --- |
@@ -1160,36 +1196,43 @@ corporate actions), and P5 step 1 is committed after them. They reach
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 267 passing | `cargo test --locked` (local) |
+| Tests | ✅ 288 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
 | Ledger, FIFO (P3) | ✅ Done (provisional decisions) | migration `m20261024_000006`; `src/ledger/`; `src/http/transactions.rs`; `tests/{ledger,transactions_api,fifo_spec}.rs` |
-| Financial transactions, corporate actions (P4) | ✅ Done (some rules provisional; committed, not pushed) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
-| Prices, FX rates (P5 step 1) | ✅ Done (committed, not yet merged) | migration `m20261030_000009`; `src/market_data/`; `src/http/market_data.rs`; `tests/market_data.rs` |
-| Valuation, allocation (P5 step 2) | ❌ Not started | — |
+| Financial transactions, corporate actions (P4) | ✅ Done (some rules provisional; PR #1) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
+| Prices, FX rates (P5 step 1) | ✅ Done (PR #1) | migration `m20261030_000009`; `src/market_data/`; `src/http/market_data.rs`; `tests/market_data.rs` |
+| Holdings, valuation, allocation (P5 step 2) | ✅ Done (committed; pull request open) | `src/valuation/`; `src/http/valuation.rs`; `tests/valuation.rs` |
 | CSV (P6) | ❌ Not started | — |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Account recovery, session cleanup | ❌ Not started | ADR-AUTH-10/11 open |
 
 ## 24. Next Recommended Task
 
-1. **Review and merge the pull request** with P4 and P5 step 1, then
-   record its CI run in §1, §15, §17 and §23. Still to confirm: the
-   provisional P4 rules (§22, question 13; ADR-LEDG-02, ADR-NUM-05).
-2. **P5 step 2: holdings, valuation and allocation at `as_of`.**
-   - Everything is decided: staleness (ADR-VAL-02), rounding
-     (ADR-NUM-05), partial results (ADR-VAL-04), signed allocation
-     (ADR-VAL-05), direct or inverse rate (ADR-VAL-06).
+1. **Merge the P5 step 2 pull request**, then record its CI run in §1,
+   §15, §17 and §23.
+2. **The rest of the MVP, before P6** (the owner deferred CSV on
+   2026-10-30). Candidates; the order is the owner's call:
+   - **ADR-AUTH-11:** cleaning up expired sessions.
+   - **ADR-AUTH-10:** account recovery, for example an admin-run reset,
+     since there is no mail service.
+   - **Performance:** a limit or measurement for ledger replay on large
+     portfolios (§22, question 16).
+   - **Deployment:** a `docker compose up --build` smoke test on a
+     machine with Docker. It was not run for P4 or P5, because the
+     development machine has no Docker.
+   - **Confirmations:** the provisional choices in §22 (questions 1–10
+     and 13).
+3. **P6 — CSV Import & Export**, later. It still needs ADR-CSV-02, the
+   staging model (§22, question 15).
 
-Implementation notes for P5:
+Implementation notes for P6:
 
-- **Holdings at `as_of`:** replay FIFO over movements dated on or before
-  `as_of` (`fifo::replay`), including splits and stock dividends.
-- **Cash at `as_of`:** sum cash movements in Rust (never SQL `SUM` over
-  decimal text).
-- **FX:** market FX rates are a new user-scoped table. Valuation must never
-  read `FX_EXCHANGE` amounts (ADR-TXN-04).
-- **Schema:** additive only; dates as date-only columns (ADR-DB-05).
-
-Out of scope for P5: CSV import and export (P6).
+- **Commit:** reuse the ledger write path, so imported transactions are
+  revalidated against the combined history in one atomic transaction
+  (ADR-CSV-04, ADR-DB-09).
+- **Prices and FX rates:** imported rows use `source = IMPORT`, which the
+  schema already allows (ADR-VAL-06).
+- **Instruments:** never created automatically (ADR-INST-05).
+- **Export:** owner-scoped, with formula-injection escaping.

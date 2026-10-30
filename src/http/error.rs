@@ -14,6 +14,7 @@ use crate::instruments::InstrumentError;
 use crate::ledger::service::LedgerError;
 use crate::market_data::MarketDataError;
 use crate::portfolios::PortfolioError;
+use crate::valuation::ValuationError;
 
 const PROBLEM_JSON: &str = "application/problem+json";
 /// Argon2 operations finish in well under a second, so capacity frees quickly.
@@ -254,6 +255,24 @@ impl From<MarketDataError> for ApiError {
             },
             MarketDataError::Database(err) => {
                 tracing::error!(error = %err, "market data database error");
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<ValuationError> for ApiError {
+    fn from(err: ValuationError) -> Self {
+        match err {
+            ValuationError::Validation(fields) => Self::Validation(fields),
+            ValuationError::NotFound => Self::NotFound,
+            ValuationError::OutOfRange => Self::Validation(vec![FieldError {
+                field: "as_of",
+                message: "the portfolio's value at this date is too large to compute exactly"
+                    .to_owned(),
+            }]),
+            ValuationError::Database(err) => {
+                tracing::error!(error = %err, "valuation database error");
                 Self::Internal
             }
         }

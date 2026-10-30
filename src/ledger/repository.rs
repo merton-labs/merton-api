@@ -7,6 +7,7 @@ use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Select,
 };
+use time::Date;
 use uuid::Uuid;
 
 use crate::auth::UserId;
@@ -205,4 +206,43 @@ pub async fn position_history(
                 .ok_or_else(|| DbErr::RecordNotFound("movement without transaction".to_owned()))
         })
         .collect()
+}
+
+/// Every position movement of an owned portfolio dated on or before
+/// `as_of`, grouped by instrument and in ledger order within each.
+pub async fn positions_until(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    portfolio_id: Uuid,
+    as_of: Date,
+) -> Result<Vec<position_movement::Model>, DbErr> {
+    position_movement::Entity::find()
+        .filter(position_movement::Column::PortfolioId.eq(portfolio_id))
+        .filter(Expr::exists(owned_portfolio(owner, portfolio_id, false)))
+        .inner_join(transaction::Entity)
+        .filter(transaction::Column::TradeDate.lte(as_of))
+        .order_by_asc(position_movement::Column::InstrumentId)
+        .order_by_asc(transaction::Column::TradeDate)
+        .order_by_asc(transaction::Column::SortOrder)
+        .order_by_asc(transaction::Column::Id)
+        .order_by_asc(position_movement::Column::Id)
+        .all(db)
+        .await
+}
+
+/// Every cash movement of an owned portfolio dated on or before `as_of`.
+pub async fn cash_until(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    portfolio_id: Uuid,
+    as_of: Date,
+) -> Result<Vec<cash_movement::Model>, DbErr> {
+    cash_movement::Entity::find()
+        .filter(cash_movement::Column::PortfolioId.eq(portfolio_id))
+        .filter(Expr::exists(owned_portfolio(owner, portfolio_id, false)))
+        .inner_join(transaction::Entity)
+        .filter(transaction::Column::TradeDate.lte(as_of))
+        .order_by_asc(cash_movement::Column::Id)
+        .all(db)
+        .await
 }

@@ -417,7 +417,7 @@ async fn replay(
     Ok(())
 }
 
-fn to_event(movement: &position_movement::Model) -> Result<Event, DbErr> {
+pub(crate) fn to_event(movement: &position_movement::Model) -> Result<Event, DbErr> {
     let corrupt = |err: String| DbErr::Type(format!("movement {}: {err}", movement.id));
     let quantity = Quantity::from_stored(&movement.quantity).map_err(corrupt)?;
     match MovementKind::from_db(&movement.kind) {

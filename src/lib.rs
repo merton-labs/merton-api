@@ -12,3 +12,4 @@ pub mod market_data;
 pub mod pagination;
 pub mod portfolios;
 pub mod validation;
+pub mod valuation;

@@ -106,6 +106,47 @@ pub fn div_round(a: Decimal, b: Decimal, scale: u32) -> Option<Decimal> {
     from_parts(quotient + i128::from(round_up), scale)
 }
 
+/// `a ÷ b` like [`div_round`], except that `a` may be negative: the
+/// magnitude is rounded half-to-even and the sign restored, so rounding is
+/// symmetric around zero.
+pub fn signed_div_round(a: Decimal, b: Decimal, scale: u32) -> Option<Decimal> {
+    let magnitude = div_round(a.abs(), b, scale)?;
+    Some(if a.is_sign_negative() && !magnitude.is_zero() {
+        -magnitude
+    } else {
+        magnitude
+    })
+}
+
+/// `a × b` rounded half-to-even to exactly `scale` places, computed on the
+/// mantissas so that nothing is rounded before that step. Either factor may
+/// be negative; `None` on overflow.
+pub fn mul_round(a: Decimal, b: Decimal, scale: u32) -> Option<Decimal> {
+    let product = a.mantissa().checked_mul(b.mantissa())?;
+    let exact_scale = a.scale() + b.scale();
+    let mantissa = if exact_scale <= scale {
+        product.checked_mul(10i128.checked_pow(scale - exact_scale)?)?
+    } else {
+        round_quotient(product, 10i128.checked_pow(exact_scale - scale)?)
+    };
+    from_parts(mantissa, scale)
+}
+
+/// `numerator ÷ divisor` (divisor > 0) rounded half-to-even, symmetric
+/// around zero.
+fn round_quotient(numerator: i128, divisor: i128) -> i128 {
+    let quotient = numerator / divisor;
+    let remainder = (numerator % divisor).unsigned_abs();
+    let half = divisor.unsigned_abs();
+    let twice = remainder.saturating_mul(2);
+    let round_away = twice > half || (twice == half && quotient % 2 != 0);
+    if round_away {
+        quotient + numerator.signum()
+    } else {
+        quotient
+    }
+}
+
 /// The mantissa of `value` expressed at `scale` (≥ its own scale).
 fn rescaled(value: Decimal, scale: u32) -> Option<i128> {
     let factor = 10i128.checked_pow(scale - value.scale())?;
@@ -252,6 +293,59 @@ mod tests {
         assert_eq!(div_round(d("0"), d("7"), 8), Some(d("0.00000000")));
         assert_eq!(div_round(d("1"), d("0"), 8), None);
         assert_eq!(div_round(d("-1"), d("2"), 8), None);
+    }
+
+    #[test]
+    fn products_round_half_to_even_once_and_symmetrically() {
+        let d = |s: &str| s.parse::<Decimal>().unwrap();
+        // 1000.12345678 × 36.12345678 has 16 places; rounded once to 8.
+        assert_eq!(
+            mul_round(d("1000.12345678"), d("36.12345678"), 8),
+            Some(d("36127.91646566"))
+        );
+        assert_eq!(mul_round(d("100"), d("35.25"), 8), Some(d("3525.00000000")));
+        assert_eq!(
+            mul_round(d("0.000000025"), d("1"), 8),
+            Some(d("0.00000002"))
+        );
+        assert_eq!(
+            mul_round(d("-0.000000025"), d("1"), 8),
+            Some(d("-0.00000002"))
+        );
+        assert_eq!(
+            mul_round(d("-0.000000035"), d("1"), 8),
+            Some(d("-0.00000004"))
+        );
+        assert_eq!(
+            mul_round(d("-0.000000004"), d("1"), 8),
+            Some(d("0.00000000"))
+        );
+        assert_eq!(
+            mul_round(
+                d("123456789012345.12345678"),
+                d("123456789012345.12345678"),
+                8
+            ),
+            None,
+            "overflow is reported, not rounded away"
+        );
+    }
+
+    #[test]
+    fn signed_division_rounds_the_magnitude() {
+        let d = |s: &str| s.parse::<Decimal>().unwrap();
+        assert_eq!(
+            signed_div_round(d("-10"), d("3"), 8),
+            Some(d("-3.33333333"))
+        );
+        assert_eq!(
+            signed_div_round(d("-20"), d("3"), 8),
+            Some(d("-6.66666667"))
+        );
+        assert_eq!(signed_div_round(d("10"), d("3"), 8), Some(d("3.33333333")));
+        let tiny = signed_div_round(d("-0.000000001"), d("1"), 8).unwrap();
+        assert!(tiny.is_zero() && !tiny.is_sign_negative());
+        assert_eq!(signed_div_round(d("-1"), d("0"), 8), None);
     }
 
     #[test]

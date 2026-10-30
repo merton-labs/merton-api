@@ -9,6 +9,7 @@ mod instruments;
 mod market_data;
 mod portfolios;
 mod transactions;
+mod valuation;
 
 use axum::http::{HeaderValue, header};
 use axum::routing::{get, post};
@@ -63,6 +64,9 @@ use crate::app::AppState;
         market_data::get_fx_rate,
         market_data::replace_fx_rate,
         market_data::delete_fx_rate,
+        valuation::holdings,
+        valuation::valuation,
+        valuation::allocation,
     ),
     modifiers(&SessionCookieScheme),
     tags(
@@ -72,6 +76,7 @@ use crate::app::AppState;
         (name = "instruments", description = "The current user's instruments. Identity fields are optional and need not be unique."),
         (name = "cash-accounts", description = "Cash accounts inside a portfolio. Changes require an active portfolio."),
         (name = "transactions", description = "The portfolio ledger. Decimal values are JSON strings; FIFO history is validated on every change."),
+        (name = "valuation", description = "Holdings, valuation and allocation at an explicit `as_of` date, computed on request. Partial results are marked and list what could not be valued."),
         (name = "market-data", description = "The current user's historical instrument prices and FX rates, entered manually. Decimal values are JSON strings."),
     ),
 )]
@@ -126,6 +131,9 @@ pub fn router(state: AppState) -> Router {
                 .put(transactions::replace)
                 .delete(transactions::delete),
         )
+        .route("/{id}/holdings", get(valuation::holdings))
+        .route("/{id}/valuation", get(valuation::valuation))
+        .route("/{id}/allocation", get(valuation::allocation))
         .route(
             "/{id}/cash-accounts/{account_id}",
             get(cash_accounts::get)
