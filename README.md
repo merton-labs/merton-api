@@ -5,8 +5,11 @@ Backend for **Merton**, an open-source, self-hosted, multi-user investment portf
 > **Status: ledger.** The server foundation, local email/password accounts
 > with server-managed cookie sessions, private portfolios, instruments, cash
 > accounts, and the transaction ledger (opening balances, buys and sells
-> with FIFO validation) are implemented. Income, transfers, FX, corporate
-> actions, valuation and CSV import are not built yet. See
+> with FIFO validation, deposits, withdrawals, dividends, interest, fees,
+> taxes and tax returns, cash transfers, FX exchanges, stock splits and
+> stock dividends) are implemented, along with manually entered
+> historical prices and FX rates. Valuation and CSV import are not built
+> yet. See
 > [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the roadmap and
 > [CLAUDE.md](CLAUDE.md) for contributor rules.
 
@@ -70,13 +73,23 @@ automatically before the server starts accepting requests.
 | GET    | `/api/v1/instruments/{id}` | cookie       | Get an own instrument                               |
 | PATCH  | `/api/v1/instruments/{id}` | cookie + CSRF | Update descriptive fields; `null` clears symbol/isin/exchange; quote currency is fixed |
 | DELETE | `/api/v1/instruments/{id}` | cookie + CSRF | Delete an unused instrument (`204`)                |
+| GET    | `/api/v1/instruments/{id}/prices` | cookie | List an instrument's prices, latest first (`limit`, `offset`, `from`, `to`) |
+| POST   | `/api/v1/instruments/{id}/prices` | cookie + CSRF | Record `{price_date, price}` in the quote currency; one per date |
+| GET    | `/api/v1/instruments/{id}/prices/{price_id}` | cookie | Get a price |
+| PUT    | `/api/v1/instruments/{id}/prices/{price_id}` | cookie + CSRF | Replace a price's date and value |
+| DELETE | `/api/v1/instruments/{id}/prices/{price_id}` | cookie + CSRF | Delete a price (`204`) |
+| GET    | `/api/v1/fx-rates` | cookie | List own FX rates, latest first (`limit`, `offset`, `base_currency`, `quote_currency`, `from`, `to`) |
+| POST   | `/api/v1/fx-rates` | cookie + CSRF | Record `{base_currency, quote_currency, rate_date, rate}`: 1 base = `rate` quote; one per pair and date |
+| GET    | `/api/v1/fx-rates/{id}` | cookie | Get an FX rate |
+| PUT    | `/api/v1/fx-rates/{id}` | cookie + CSRF | Replace an FX rate |
+| DELETE | `/api/v1/fx-rates/{id}` | cookie + CSRF | Delete an FX rate (`204`) |
 | GET    | `/api/v1/portfolios/{id}/cash-accounts` | cookie | List a portfolio's cash accounts           |
 | POST   | `/api/v1/portfolios/{id}/cash-accounts` | cookie + CSRF | Create `{name, currency}` (active portfolios only) |
 | GET    | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie | Get a cash account          |
 | PATCH  | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie + CSRF | Rename (currency is fixed) |
 | DELETE | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie + CSRF | Delete an account with no movements (`204`) |
 | GET    | `/api/v1/portfolios/{id}/transactions` | cookie | List transactions in ledger order (`limit`, `offset`, `instrument_id`) |
-| POST   | `/api/v1/portfolios/{id}/transactions` | cookie + CSRF | Record `OPENING_POSITION`, `OPENING_CASH`, `BUY` or `SELL` |
+| POST   | `/api/v1/portfolios/{id}/transactions` | cookie + CSRF | Record a transaction (kinds below) |
 | GET    | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie | Get a transaction |
 | PUT    | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie + CSRF | Replace a transaction; history is re-validated |
 | DELETE | `/api/v1/portfolios/{id}/transactions/{transaction_id}` | cookie + CSRF | Delete a transaction; history is re-validated |
@@ -86,12 +99,19 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 `invalid_credentials`, `email_taken`, `validation_failed`, `csrf_invalid`,
 `untrusted_origin`, `rate_limited`, `service_overloaded`, `not_found`,
 `portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history`,
-`instrument_in_use`, `cash_account_in_use`, `insufficient_holdings`.
+`instrument_in_use`, `cash_account_in_use`, `insufficient_holdings`,
+`no_holdings`, `price_exists`, `fx_rate_exists`.
 
 Instruments use the asset classes `STOCK`, `ETF` and `MUTUAL_FUND`. Their
 symbol, ISIN and exchange are optional and need not be unique, and ISINs
 are checked against their check digit. Cash, including bank deposits, lives
 in cash accounts: a portfolio can have several, even in the same currency.
+
+Prices and FX rates are entered by hand (CSV import comes later); nothing is
+fetched automatically. A price is in its instrument's quote currency and
+may be zero; a rate must be greater than zero. Market FX rates are separate
+from the amounts recorded by `FX_EXCHANGE` transactions. An instrument with
+prices cannot be deleted (`409 instrument_in_use`).
 
 ### Ledger
 
@@ -104,6 +124,36 @@ in cash accounts: a portfolio can have several, even in the same currency.
   - `BUY` and `SELL`: `instrument_id`, `quantity` and `price`, with optional
     `fee`, `tax` and `cash_account_id`. The cash account must use the
     instrument's quote currency.
+  - `DEPOSIT`, `WITHDRAWAL`, `FEE`, `TAX` and `TAX_RETURN`:
+    `cash_account_id` and a positive `amount`. A deposit or tax return adds
+    to the account; the others take from it.
+  - `DIVIDEND`: `instrument_id` and the gross `amount`, with optional `fee`
+    and `tax` withheld and an optional `cash_account_id` (in the
+    instrument's quote currency), which is credited with the net amount.
+  - `INTEREST`: `cash_account_id` and the gross `amount`, with optional
+    `fee` and `tax`; the account is credited with the net amount.
+  - For `DIVIDEND` and `INTEREST`, `fee` + `tax` may not exceed `amount`.
+  - `CASH_TRANSFER`: `cash_account_id` (source),
+    `destination_cash_account_id` (another account of the same portfolio, in
+    the same currency) and a positive `amount`, with an optional `fee`
+    paid by the source on top of the amount.
+  - `FX_EXCHANGE`: `cash_account_id` and `amount` (spent),
+    `destination_cash_account_id` (an account in another currency) and
+    `destination_amount` (received), with an optional `fee` in the source
+    currency, paid on top of the amount spent. The executed rate is the
+    ratio of the two amounts.
+  - `STOCK_SPLIT`: `instrument_id` and `ratio` as `new:old`, for example
+    `4:1`, or `1:3` for a reverse split. Every lot's quantity changes in
+    proportion and total cost is unchanged.
+  - `STOCK_DIVIDEND`: `instrument_id` and `quantity` (shares received),
+    spread over the open lots at no cost.
+  - Cash in lieu, on `STOCK_SPLIT` and `STOCK_DIVIDEND`:
+    `cash_in_lieu_quantity` (the fraction, in post-action shares) and
+    `amount` (cash received), with an optional `cash_account_id`. The
+    fraction is disposed of through FIFO, realizing profit or loss.
+  - Holdings after a split are rounded half-to-even to 8 decimal places,
+    with the residual in the last lot. A split or stock dividend with no
+    holding on its date is rejected with `409 no_holdings`.
 - **Decimals:** sent as JSON **strings** (at most 8 decimals and 15
   integer digits) and stored exactly as entered. Binary floating point is
   never used. Amounts and FIFO totals are computed exactly; a result too
@@ -253,6 +303,7 @@ src/
 ├── instruments/         # Instruments (asset class, identifiers, quote currency)
 ├── cash_accounts/       # Cash accounts, owned through their portfolio
 ├── ledger/              # Decimals, FIFO, transactions and their movements
+├── market_data/         # Historical instrument prices and FX rates
 ├── validation.rs        # Shared value types (names, currency codes)
 ├── pagination.rs        # Shared limit/offset paging
 ├── http/                # Router, handlers, extractors, errors, OpenAPI

@@ -332,6 +332,10 @@ Every decision uses the same fields:
   - `portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history` (P2A)
   - `instrument_in_use`, `cash_account_in_use` (P2B)
   - `insufficient_holdings` (P3, `409`, with the date in `detail`)
+  - `no_holdings` (P4, `409`): a split or stock dividend has no holding to
+    adjust on its date
+  - `price_exists` and `fx_rate_exists` (P5, `409`): a price for that
+    instrument and date, or a rate for that pair and date, already exists
   - `internal_error`
 - **Consequences:** Never change an existing code's meaning. Never leak SQL
   errors, stack traces, secrets or other users' data; internal errors are
@@ -754,6 +758,34 @@ Every decision uses the same fields:
   - **P4 extension:** additive only. Splits and stock dividends add
     movement kinds. Transfers and FX exchanges post two cash movements and
     add nullable transaction columns through `ADD COLUMN`.
+  - **P4 cash transactions: Proposed, implemented provisionally**
+    (migration `m20261030_000007_add_transfer_destination`). It adds one
+    nullable column, `transactions.destination_cash_account_id`, with an
+    inline `REFERENCES cash_accounts (id) ON DELETE RESTRICT` and an
+    index. The inline form is used because SeaQuery cannot add a foreign
+    key to an existing SQLite table; it is also valid PostgreSQL. A test
+    asserts the `RESTRICT` rule, and a P3 database upgrades cleanly
+    (smoke-tested). The new kinds reuse the existing columns: `amount`
+    holds a deposit, withdrawal, fee, tax or transfer amount, or the gross
+    income; `fee` and `tax` hold what was withheld from income. Awaiting
+    owner confirmation.
+  - **P4 FX exchanges and corporate actions: Proposed, implemented
+    provisionally** (migration
+    `m20261030_000008_add_exchange_and_corporate_actions`):
+    - **New columns:** three nullable decimal-text columns on
+      `transactions`: `destination_amount` (FX received), `ratio` (a
+      split's `new:old`) and `cash_in_lieu_quantity`.
+    - **New movement kinds:** `SPLIT` and `STOCK_DIVIDEND` on
+      `position_movements`, with no schema change. See ADR-TXN-07 for what
+      their `quantity` and `amount` hold.
+    - **Order:** a transaction's movements replay in the order they were
+      posted (time-ordered ids), so a lot adjustment precedes its cash in
+      lieu.
+    - **FIFO:** P3's note below is now implemented: `fifo::Event` has
+      `Split` and `StockDividend`, which adjust lots.
+    - **Evidence:** a P3 database upgrades through migrations 7 and 8
+      (smoke-tested).
+    - Awaiting owner confirmation.
   - **FIFO in P4:** P3's pure `fifo::Event` only acquires and disposes.
     Splits and stock dividends change existing lots rather than opening
     new ones, so P4 must add lot-adjusting events (raised by the AGY
@@ -881,8 +913,18 @@ Every decision uses the same fields:
   - Fee, Tax, and Tax Return (or an equivalent correction)
   - Cash Transfer, FX Exchange
   - Stock Dividend, Stock Split, Reverse Split
-- **Open detail:** how "Tax Return" is modelled, as its own type or as a
-  correction of a Tax.
+- **Tax Return (Accepted · Source: Owner, 2026-10-30):** a separate
+  transaction kind, `TAX_RETURN`, not a correction of a `TAX`.
+  - **Shape** (Implementation P4, the same as `TAX`): `cash_account_id`
+    and a positive `amount`, which is credited to the account.
+- **Kinds as implemented (P4):**
+  - `OPENING_POSITION`, `OPENING_CASH`, `BUY`, `SELL`
+  - `DEPOSIT`, `WITHDRAWAL`, `DIVIDEND`, `INTEREST`
+  - `FEE`, `TAX`, `TAX_RETURN`
+  - `CASH_TRANSFER`, `FX_EXCHANGE`
+  - `STOCK_SPLIT`, `STOCK_DIVIDEND`
+  - Stock Split and Reverse Split share `STOCK_SPLIT`. Its ratio says
+    which one it is, as Snowball Analytics does (ADR-TXN-07).
 
 ### ADR-TXN-02 — Fees and taxes
 - **Status:** Accepted · **Source:** Owner · **Phases:** P3, P4
@@ -898,21 +940,70 @@ Every decision uses the same fields:
 - **Status:** Accepted · **Source:** Owner · **Phases:** P4
 - **Decision:** A cash transfer moves money between cash accounts and
   produces balanced cash movements. An FX exchange is a separate operation.
+- **P4 `CASH_TRANSFER` (Accepted · Source: Owner, 2026-10-30):**
+  - **Fields:** `cash_account_id` (source), `destination_cash_account_id`
+    and a positive `amount`.
+  - **Movements:** −amount on the source, +amount on the destination.
+  - **Accounts:** both belong to the same portfolio, use the same
+    currency, and must differ. Moving money across currencies is an
+    `FX_EXCHANGE`.
+- **Transfer fee:** an optional `fee`, paid by the source on top of
+  `amount`, so the source posts −(amount + fee). This was added when the
+  fee rules were settled (ADR-TXN-04). Before that, the owner had accepted
+  transfers without fee fields.
 
 ### ADR-TXN-04 — FX exchange records executed amounts
 - **Status:** Accepted · **Source:** Owner · **Phases:** P4
 - **Decision:** An FX exchange records the actually executed amounts and
   rate. Executed rates are kept separate from the historical market FX
   rates used for valuation. Fees are not included in the principal amounts.
-- **Open detail:** the exact rules for charging transfer or exchange fees
-  to the source or destination account have been referenced but not
-  written down. They must be specified before P4.
+- **Fee placement and FX shape (Accepted · Source: Owner, 2026-10-30):**
+  follow Snowball Analytics. Its `Cash_Convert` records:
+  - the amount spent, in the transaction's currency;
+  - the amount received, in the other currency;
+  - a commission in the spent currency, paid on top of the amount spent
+    (example: 82 EUR bought for 100 USD plus a 2.5 USD fee).
+  - The rate is not entered; it is implied by the two amounts.
+- **P4 `FX_EXCHANGE` (Implementation P4, following that model):**
+  - **Fields:** `cash_account_id` (source) with `amount` (spent, > 0);
+    `destination_cash_account_id` with `destination_amount`
+    (received, > 0); optional `fee` (≥ 0).
+  - **Movements:** the source posts −(amount + fee) and the destination
+    +destination_amount.
+  - **Accounts:** both belong to the same portfolio, in different
+    currencies. The same currency is a `CASH_TRANSFER` (`422`).
+  - **Rate:** the executed rate is the exact ratio of the two amounts. It
+    is not stored separately, because computing it as a decimal would need
+    rounding. Market FX rates (P5) are a separate table, and valuation must
+    never read executed amounts.
+- **Fee currency (Accepted · Source: Owner, 2026-10-30):**
+  - The fee is always in the source currency. Snowball also allows a fee
+    in another currency (`FeeCurrency`); here such a fee is recorded as a
+    separate `FEE` on the right account.
+  - Transfer fees (ADR-TXN-03) follow the same rule: Snowball has no
+    account-to-account transfer of its own.
 
 ### ADR-TXN-05 — Dividends and interest
 - **Status:** Accepted · **Source:** Owner · **Phases:** P4
 - **Decision:** Dividends and interest record the gross amount, any fee or
   tax, and the net amount. Updating a cash account is optional where the
   transaction rules permit.
+- **P4 `DIVIDEND` and `INTEREST` (Accepted · Source: Owner, 2026-10-30):**
+  - **Amounts:** the gross amount is entered as `amount` (> 0), with
+    optional `fee` and `tax` (≥ 0, default 0). The net amount,
+    `amount − fee − tax`, is derived exactly and is not stored; it is the
+    cash movement.
+  - **Net amount:** may be zero but not negative (`422` on `amount`).
+  - **`DIVIDEND`** (which also covers fund distributions) requires
+    `instrument_id`. Its `cash_account_id` is optional, like a trade's.
+  - **Currency:** a dividend's account must use the instrument's quote
+    currency. Dividends paid in another currency are not supported.
+  - **`INTEREST`** requires `cash_account_id` (the account the interest
+    was earned on, which also gives its currency) and takes no instrument.
+  - **No position effect:** neither changes holdings or cost basis.
+  - **No holding check:** a dividend is not checked against the holding
+    on its date. A payment can arrive after the shares were sold, and the
+    MVP has no ex-date or pay date (ADR-LEDG-08).
 
 ### ADR-TXN-06 — Corporate actions
 - **Status:** Accepted · **Source:** Owner · **Phases:** P4
@@ -925,15 +1016,68 @@ Every decision uses the same fields:
   - **Cash in lieu** allocates cost to the fractional quantity and
     realizes economic profit or loss.
   - **Deferred:** spin-offs, mergers, rights issues and return of capital.
+- **P4 inputs:**
+  - **`STOCK_SPLIT`:** `instrument_id` and `ratio` as `new:old`, for
+    example `4:1`, or `1:3` for a one-for-three reverse split.
+  - **`STOCK_DIVIDEND`:** `instrument_id` and `quantity`, the number of
+    shares received.
+  - **Cash in lieu** (optional on both): `cash_in_lieu_quantity` (the
+    fraction, in post-action shares) and `amount` (the cash received)
+    together, plus an optional `cash_account_id` in the quote currency.
+  - **No holding:** both need a holding on their date; otherwise
+    `409 no_holdings`. This also applies when an edit or delete removes
+    that holding.
 
 ### ADR-TXN-07 — Corporate action allocation and rounding details
-- **Status:** **Open** · **Phases:** P4
-- **Decision:** Not finalized:
-  - how cost is allocated across lots for stock dividends and cash in lieu
-  - the lot-level rounding policy
-  - where rounding residuals go
-- **Consequences:** Write these as explicit rules and get them approved
-  before implementing P4. Do not silently assume them.
+- **Status:** Accepted (approach) / **Proposed** (rules below) · **Source:** Owner (2026-10-30: "follow Snowball Analytics; where it has no rule, choose what is appropriate"), Implementation (P4) · **Phases:** P4
+- **What Snowball Analytics specifies:**
+  - A split takes a coefficient: 4 for a four-for-one split, 0.5 for a
+    two-to-one reverse split.
+  - A stock dividend takes the number of shares received.
+  - It documents no lot-level allocation, rounding or cash-in-lieu rules.
+- **Rules chosen in P4 (Proposed):** the owner reviewed them on
+  2026-10-30 and could not judge them, so they stay Proposed. Before
+  relying on cash-in-lieu profit or loss, check these rules against a
+  broker statement or a tax adviser.
+  1. **Ratio:** a split is entered as `new:old` rather than a single
+     coefficient. Ratios such as 1:3 have no exact decimal coefficient.
+     `4:1` means the same as Snowball's 4.
+  2. **Lots:** a split or stock dividend changes every open FIFO lot's
+     quantity in proportion. Each lot keeps its cost and acquisition
+     order, so total cost is unchanged and cost per share falls (or rises)
+     evenly. Holding dates are preserved.
+  3. **New total:**
+     - A stock dividend gives exactly held + received.
+     - A split gives held × new ÷ old, rounded half-to-even to 8 decimal
+       places (the input precision).
+  4. **Per-lot rounding:** each lot's new quantity is rounded half-to-even
+     to 8 places. The last lot takes the residual, so the lots add up to
+     the new total exactly. Costs are never rounded.
+  5. **Too small:** a split that would round the holding, or any lot, to
+     zero is rejected (`422` on `ratio`).
+  6. **Cash in lieu:** the fraction is disposed of through FIFO (oldest
+     lots first) at `amount` proceeds. Its cost comes from the existing
+     partial-lot rule (ADR-NUM-05, 10 places, exact remainder kept), and
+     the difference is realized profit or loss.
+- **Storage:** the position movement for a split is `SPLIT` with
+  `quantity` = new and `amount` = old. A stock dividend is
+  `STOCK_DIVIDEND` with `quantity` = shares received and `amount` = 0.
+  Cash in lieu is an ordinary `DISPOSE` posted after it. FIFO replays
+  these from full history on every change, so editing an earlier trade
+  re-applies later splits.
+
+### ADR-TXN-08 — Standalone cash transactions (P4)
+- **Status:** Accepted · **Source:** Owner (2026-10-30), Implementation (P4) · **Phases:** P4
+- **Decision:**
+  - **Fields:** `DEPOSIT`, `WITHDRAWAL`, `FEE`, `TAX` and `TAX_RETURN`
+    each take `cash_account_id` and a positive `amount`.
+  - **Direction:** a deposit or tax return posts +amount; the others post
+    −amount.
+  - **No instrument:** they take no `instrument_id`, so a standalone fee
+    or tax never changes a cost basis. Charges that belong in cost basis
+    are entered on the trade (ADR-TXN-02).
+  - **No fee fields:** deposits and withdrawals have none; a bank charge
+    is a separate `FEE`.
 
 ---
 
@@ -996,6 +1140,21 @@ Every decision uses the same fields:
   such as display, settlement amounts and allocation residuals, and every
   operation validates against overflow.
 - **Open:** the rounding mode and scale for each operation.
+- **P5 valuation (Accepted · Source: Owner, 2026-10-30):**
+  - quantity × price and multiplying by an FX rate are exact; nothing is
+    rounded along the way;
+  - a base-currency value is rounded half-to-even to 8 places, once, at
+    the end;
+  - converting through an inverse pair (dividing by the rate) rounds
+    half-to-even to 8 places;
+  - allocation percentages round half-to-even to 4 places (`12.3457`) and
+    are not forced to add up to exactly 100.
+- **P4 operations: Proposed, implemented provisionally.**
+  - Cash transactions, transfers and FX exchanges are exact sums; nothing
+    is rounded.
+  - Splits and stock dividends round holdings half-to-even to 8 places,
+    with the residual in the last lot. Cost is never rounded (ADR-TXN-07).
+  - The FX executed rate is not computed, so it is never rounded.
 - **P3 FIFO allocation: Proposed, implemented provisionally.**
   - **No rounding needed:** trade amounts are exact, with no rounding.
   - **Whole lot:** consuming a whole lot takes its remaining cost exactly.
@@ -1029,7 +1188,12 @@ Every decision uses the same fields:
 - **Decision:** Valuation uses the latest price on or before `as_of`, and
   returns that price's date, its source and a staleness indicator. Missing
   prices are never fabricated.
-- **Open detail:** the staleness threshold.
+- **Staleness threshold (Accepted · Source: Owner, 2026-10-30):**
+  - A price is stale when its date is more than **7** calendar days
+    before `as_of`.
+  - An FX rate is stale when its date is more than **3** calendar days
+    before `as_of`.
+  - Stale values are still used; they are only flagged.
 
 ### ADR-VAL-03 — Historical FX rates
 - **Status:** Accepted · **Source:** Owner · **Phases:** P5
@@ -1059,6 +1223,42 @@ Every decision uses the same fields:
   - If NPV ≤ 0, the percentages are `null`.
   - Negative cash is flagged, and is not interpreted as a margin loan.
   - Partial valuations do not present allocation as complete.
+
+### ADR-VAL-06 — Price and FX-rate storage (P5)
+- **Status:** Accepted · **Source:** Owner (2026-10-30), Implementation (P5) · **Phases:** P5, P6
+- **Schema** (migration `m20261030_000009_create_market_data`):
+  - **`instrument_prices`:** `instrument_id` (`ON DELETE RESTRICT`),
+    date-only `price_date`, decimal-text `price`, `source`. Unique on
+    (instrument, date). Prices belong to their instrument's owner.
+  - **`fx_rates`:** `owner_user_id` (`RESTRICT`), `base_currency`,
+    `quote_currency`, date-only `rate_date`, decimal-text `rate`, `source`.
+    Unique on (owner, base, quote, date).
+  - **`source`:** `MANUAL` (entered through the API) or `IMPORT` (P6), with
+    a `CHECK` constraint (ADR-DB-08). The API always sets `MANUAL`; an
+    edit keeps the original source.
+- **Values:**
+  - **Price:** in the instrument's quote currency, ≥ 0 (zero allows a
+    worthless or delisted holding).
+  - **Rate:** > 0. One `base_currency` is worth `rate` units of
+    `quote_currency`. Base and quote must differ.
+  - Both use the ledger's decimal limits (8 places, 15 integer digits;
+    ADR-NUM-04).
+  - **Dates:** 1900-01-01 to 2100-12-31, like trade dates.
+- **Pairs:** `USD/THB` and `THB/USD` are different pairs, so both can be
+  stored for one date.
+- **Direct or inverse (Accepted · Source: Owner, 2026-10-30):** to convert
+  USD to THB, valuation takes the latest-dated of the direct (`USD/THB`)
+  and inverse (`THB/USD`) rates on or before `as_of`. On the same date the
+  direct rate wins. An inverse rate is divided by, rounding half-to-even to
+  8 places (ADR-NUM-05).
+- **API:** `/api/v1/instruments/{id}/prices[/{price_id}]` and
+  `/api/v1/fx-rates[/{id}]`, with create, list (latest first, filtered by
+  inclusive `from`/`to` dates and, for rates, by currency), get, replace
+  (`PUT`) and delete.
+  - A duplicate date returns `409 price_exists` or `fx_rate_exists`; the
+    unique indexes enforce it under concurrency too.
+  - An instrument with prices cannot be deleted (`409 instrument_in_use`).
+  - Another user's instrument, price or rate is `404`.
 
 ---
 
@@ -1178,11 +1378,10 @@ Every decision uses the same fields:
 | ADR-LEDG-02 | Confirm the P3 ledger schema (implemented provisionally) | Confirmation only |
 | ADR-LEDG-07 | Confirm one OPENING_POSITION per lot (implemented provisionally) | Confirmation only |
 | ADR-LEDG-08 | Confirm `sort_order` semantics (implemented provisionally) | Confirmation only |
-| ADR-NUM-05 | Confirm FIFO allocation rounding (implemented provisionally); rounding for P4/P5 operations | P4–P5 |
-| ADR-TXN-01 | Modelling of Tax Return | P4 |
-| ADR-TXN-04 | Fee placement rules for transfers and FX exchanges | P4 |
-| ADR-TXN-07 | Stock-dividend and cash-in-lieu allocation and rounding | P4 |
-| ADR-VAL-02 | Price/FX staleness threshold | P5 |
+| ADR-NUM-05 | Confirm FIFO allocation rounding (implemented provisionally) | Confirmation only |
+| ADR-LEDG-02 | Confirm the P4 schema: `destination_cash_account_id`, `destination_amount`, `ratio`, `cash_in_lieu_quantity`, and the `SPLIT`/`STOCK_DIVIDEND` movements (implemented provisionally) | Confirmation only |
+| ADR-TXN-07 | Review the corporate-action rules chosen under the owner's delegation (`new:old` ratio, proportional lots, 8-place rounding, residual to the last lot, cash in lieu through FIFO). Owner could not judge them on 2026-10-30. | Confirmation only |
+| ADR-NUM-05 | Confirm the P4 rounding (holdings to 8 places after splits) | Confirmation only |
 | ADR-CSV-02 | Import staging model | P6 |
 | ADR-AUTH-10 | Account recovery | Before production use |
 | ADR-AUTH-11 | Expired session cleanup | Before production use |

@@ -1,6 +1,6 @@
 //! Owner-scoped instrument queries. Every function filters by the owner.
 
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, Query, SelectStatement};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Select,
@@ -19,6 +19,18 @@ pub struct Changes<'a> {
     pub symbol: Option<Option<&'a str>>,
     pub isin: Option<Option<&'a str>>,
     pub exchange: Option<Option<&'a str>>,
+}
+
+/// `SELECT 1 FROM instruments WHERE id = ? AND owner_user_id = ?`, for use
+/// in `EXISTS` guards on tables that belong to an instrument.
+pub(crate) fn owned_instrument(owner: UserId, instrument_id: Uuid) -> SelectStatement {
+    let mut select = Query::select();
+    select
+        .expr(Expr::value(1))
+        .from(Entity)
+        .and_where(Column::Id.eq(instrument_id))
+        .and_where(Column::OwnerUserId.eq(owner.as_uuid()));
+    select
 }
 
 fn owned(owner: UserId) -> Select<Entity> {

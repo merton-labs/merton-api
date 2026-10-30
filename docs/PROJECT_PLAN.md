@@ -35,8 +35,9 @@ separate repository.
 | P1.1 (auth hardening) | Completed |
 | P2A (portfolios) | Completed (`c5e812d`, CI green; some decisions provisional) |
 | P2B (instruments, cash accounts) | Completed (`04bb1b9`, CI green; some decisions provisional) |
-| P3 (ledger, FIFO) | Completed (verified locally; decisions provisional, see §17) |
-| P4 (financial transactions, corporate actions) | Next; not started |
+| P3 (ledger, FIFO) | Completed (`fc538e1`, CI green; decisions provisional, see §17) |
+| P4 (financial transactions, corporate actions) | Completed (committed locally in two commits, not yet pushed or run in CI; some rules provisional, see §17) |
+| P5 (valuation, FX, allocation) | In progress: price and FX-rate storage done (committed, in a pull request with P4); valuation next |
 
 ## 2. Product Goals
 
@@ -106,7 +107,7 @@ From ADR-SCOPE-05 and the transaction rules:
 | Serialization | Serde |
 | Logging | tracing + tracing-subscriber |
 | Auth crypto | `argon2`, `sha2`, `hmac`, `getrandom`, `base64ct` |
-| Decimals | `rust_decimal`: required for financial values, **not yet added** |
+| Decimals | `rust_decimal` 1.43 (added in P3), required for financial values |
 | Frontend (separate repo) | SvelteKit, Svelte 5 runes, TypeScript |
 | Deployment | Docker multi-stage image, Docker Compose, named volume |
 | CI | GitHub Actions: fmt, check, clippy (`-D warnings`), test, all `--locked` |
@@ -133,6 +134,7 @@ src/
 ├── instruments/            # instrument types (asset class, ISIN), owner-scoped repository, service
 ├── cash_accounts/          # cash accounts owned through their portfolio
 ├── ledger/                 # decimal.rs, fifo.rs (pure), transaction.rs (validation, effects), repository, service
+├── market_data/            # instrument prices and FX rates: owner-scoped repository, service
 ├── validation.rs           # shared DisplayName, CurrencyCode, field-error collector
 ├── pagination.rs           # shared Page / Paged
 ├── auth/                   # framework-independent authentication logic
@@ -147,7 +149,7 @@ src/
 └── infrastructure/
     ├── database.rs         # pool + SQLite pragmas (only SQLite-specific code)
     ├── entities/           # user, user_session, portfolio, instrument, cash_account, transaction, position_movement, cash_movement
-    └── migrations/         # m20261024_000001 … m20261024_000006
+    └── migrations/         # m20261024_000001 … m20261024_000006, m20261030_000007 … m20261030_000009
 tests/
 ├── common/mod.rs           # TestApp harness: isolated in-memory SQLite per test
 ├── auth.rs  database.rs  http.rs  portfolios.rs  instruments.rs  cash_accounts.rs
@@ -182,11 +184,11 @@ Implemented tables are marked ✅; everything else is planned.
 | `portfolios` ✅ | user (immutable) | P2A | `owner_user_id` FK→users (RESTRICT), `name`, `base_currency`, `status` CHECK `ACTIVE`/`ARCHIVED`, timestamps |
 | `instruments` ✅ | user | P2B | `asset_class` CHECK (STOCK/ETF/MUTUAL_FUND), `name`, optional non-unique `symbol`/`isin`/`exchange`, fixed `quote_currency`; metadata column deferred |
 | `cash_accounts` ✅ | portfolio | P2B | `portfolio_id` FK (RESTRICT), `name`, fixed `currency`; many per portfolio |
-| `transactions` ✅ | portfolio | P3 | `kind`, `trade_date`, `sort_order`, optional instrument/cash account, decimal-text inputs, `note`; P4 adds kinds |
-| `position_movements` ✅ | transaction | P3 | `ACQUIRE`/`DISPOSE`, positive quantity, cost or net proceeds (source of holdings and FIFO lots) |
+| `transactions` ✅ | portfolio | P3, P4 | `kind`, `trade_date`, `sort_order`, optional instrument/cash account, decimal-text inputs, `note`; P4 adds kinds, `destination_cash_account_id`, `destination_amount`, `ratio`, `cash_in_lieu_quantity` |
+| `position_movements` ✅ | transaction | P3, P4 | `ACQUIRE`/`DISPOSE`, positive quantity, cost or net proceeds; P4 adds `SPLIT` and `STOCK_DIVIDEND` lot adjustments (source of holdings and FIFO lots) |
 | `cash_movements` ✅ | transaction | P3 | signed `amount_delta` per cash account (source of balances) |
-| `instrument_prices` | via instrument | P5 | date, price, source |
-| `fx_rates` | user | P5 | date, base/quote pair, rate, direction explicit |
+| `instrument_prices` ✅ | via instrument | P5 | `price_date`, decimal-text `price`, `source`; unique per instrument and date (ADR-VAL-06) |
+| `fx_rates` ✅ | user | P5 | `base_currency`, `quote_currency`, `rate_date`, decimal-text `rate` (1 base = rate quote), `source`; unique per owner, pair and date |
 | import records | user/portfolio | P6 | upload, mapping, row results, audit |
 
 The ledger's physical schema was implemented in P3 as **Proposed**
@@ -259,7 +261,9 @@ Summary of ADR-LEDG-01 … LEDG-10 and ADR-TXN-01 … TXN-07:
   - stock dividends spread cost basis across the resulting lots
   - splits preserve total cost
   - cash in lieu realizes P/L on the allocated fractional cost
-  - details are OPEN (ADR-TXN-07)
+  - P4 rules (ADR-TXN-07, Proposed): proportional lot adjustment, holdings
+    rounded to 8 places with the residual in the last lot, and cash in
+    lieu disposed of through FIFO
 
 ## 10. Financial Precision and Rounding
 
@@ -282,7 +286,13 @@ ADR-NUM-01 … NUM-05:
   totals are exact, and a result that cannot be represented exactly is
   rejected. Partial-lot cost is rounded half-to-even to 10 places, and the
   lot keeps the exact remainder (ADR-NUM-05).
-- **OPEN:** currency minor units, and rounding for P4/P5 operations.
+- **P4 (Proposed):** cash, transfer and FX postings are exact. Splits and
+  stock dividends round holdings half-to-even to 8 places, with the
+  residual in the last lot; cost is never rounded.
+- **P5 (Accepted, owner 2026-10-30):** valuation is exact until the end;
+  base-currency values and inverse-rate conversions round half-to-even to
+  8 places; allocation percentages to 4 places, not forced to sum to 100.
+- **OPEN:** currency minor units.
 
 ## 11. Market Data and FX
 
@@ -390,9 +400,9 @@ ADR-API-01 … API-06:
 | **P1.1** | Authentication Security Hardening | ✅ Completed (`8e646a1`, CI green) |
 | **P2A** | Portfolio CRUD & Ownership | ✅ Completed (`c5e812d`, CI green) |
 | **P2B** | Instruments & Cash Accounts | ✅ Completed (`04bb1b9`, CI green) |
-| **P3** | Transaction Ledger & FIFO | ✅ Completed (verified locally; record commit + CI on merge) |
-| **P4** | Financial Transactions & Corporate Actions | ⏳ Not started (next) |
-| **P5** | Valuation, FX & Asset Allocation | Not started |
+| **P3** | Transaction Ledger & FIFO | ✅ Completed (`fc538e1`, CI green) |
+| **P4** | Financial Transactions & Corporate Actions | ✅ Completed (committed locally; record CI once pushed) |
+| **P5** | Valuation, FX & Asset Allocation | ⏳ In progress (price and FX-rate storage done) |
 | **P6** | CSV Import & Export | Not started |
 
 Phases are implemented in order. Do not merge phases, and do not pull
@@ -415,8 +425,8 @@ flowchart LR
 | P2A ✅ | P1.1 | Done; provisional choices await confirmation (ADR-API-04, ADR-PORT-03, ADR-PORT-05) |
 | P2B ✅ | P2A | Done; provisional choices await confirmation (ADR-INST-04, ADR-PORT-04, ADR-INST-02) |
 | P3 ✅ | P2B | Done; provisional choices await confirmation (ADR-LEDG-02, LEDG-07, LEDG-08, NUM-04, NUM-05) |
-| P4 | P3 | ADR-TXN-01 Tax Return, ADR-TXN-04 fee placement, ADR-TXN-07 corporate-action allocation |
-| P5 | P3, P4 | ADR-VAL-02 staleness threshold |
+| P4 ✅ | P3 | Done; provisional choices await confirmation (ADR-LEDG-02 schema, ADR-TXN-07 rules, ADR-NUM-05 P4 rounding) |
+| P5 ⏳ | P3, P4 | All decisions answered (ADR-VAL-02, VAL-06, NUM-05 for P5; 2026-10-30) |
 | P6 | P3, P4, P5 | ADR-CSV-02 staging model |
 
 ## 17. Phase Deliverables
@@ -667,9 +677,8 @@ P2A onward are *Proposed* until they are implemented.
   instrument metadata.
 
 ### P3 — Transaction Ledger & FIFO
-- **Status:** ✅ Completed. Verified locally: all four CI commands pass and
-  there are 213 tests in total. Record the commit and CI run here once it
-  is merged.
+- **Status:** ✅ Completed. Evidence: commit `fc538e1`; CI green (GitHub
+  Actions run 40089796866). 213 tests at the time.
 - **Objective:** an authoritative ledger with FIFO cost basis.
 - **Dependencies:** P2B.
 - **Provisional decisions:** the owner decisions due before P3 were still
@@ -770,10 +779,86 @@ P2A onward are *Proposed* until they are implemented.
   (P5).
 
 ### P4 — Financial Transactions & Corporate Actions
-- **Status:** Not started.
+- **Status:** ✅ Completed. Verified locally: all four CI commands pass and
+  there are 251 tests in total. It was delivered in two steps (the owner
+  accepted the split) and committed on `main` as `d3d1c08` (cash transactions) and the commit after it (FX and corporate actions). Step 1 alone
+  also passed all four commands (230 tests). Not yet pushed; record the CI
+  run here once it is.
 - **Objective:** the remaining MVP transaction types.
-- **Dependencies:** P3. Decisions ADR-TXN-01, TXN-04 and TXN-07 must be
-  made first.
+- **Dependencies:** P3. Owner decisions (2026-10-30):
+  - ADR-TXN-01: Tax Return is its own kind.
+  - ADR-TXN-04 and TXN-07: follow Snowball Analytics, and where it has no
+    rule, choose what is appropriate.
+  - The step-1 shapes (ADR-TXN-03/05/08) were confirmed.
+  - FX and transfer fees are always in the source currency (ADR-TXN-04).
+- **Step 1, cash transactions:**
+  - `DEPOSIT`, `WITHDRAWAL`, `FEE`, `TAX` (ADR-TXN-08)
+  - `DIVIDEND` (also covers distributions) and `INTEREST`: gross less fee
+    and tax, with net ≥ 0 (ADR-TXN-05)
+  - `CASH_TRANSFER` between two accounts of one portfolio in one currency
+    (ADR-TXN-03)
+  - migration `m20261030_000007_add_transfer_destination`
+- **Step 2, the rest of P4:**
+  - `TAX_RETURN` (ADR-TXN-01)
+  - `FX_EXCHANGE`: spent and received amounts, with the fee in the source
+    currency on top, as in Snowball's `Cash_Convert`; the rate is implied
+    by the amounts (ADR-TXN-04)
+  - an optional transfer `fee`, paid by the source
+  - `STOCK_SPLIT` with a `new:old` ratio (covers reverse splits) and
+    `STOCK_DIVIDEND` with the shares received, both with optional cash in
+    lieu (ADR-TXN-06/07)
+  - lot-adjusting FIFO events and `no_holdings` (`409`)
+  - migration `m20261030_000008_add_exchange_and_corporate_actions`
+- **Provisional (Proposed, awaiting owner review):**
+  - the schema additions (ADR-LEDG-02)
+  - the corporate-action rules chosen under the owner's delegation
+    (ADR-TXN-07, ADR-NUM-05). The owner could not judge them on
+    2026-10-30, so they stay Proposed.
+- **Files:**
+  - `src/ledger/decimal.rs`: `Ratio`, exact `div_round`
+  - `src/ledger/fifo.rs`: `Split` and `StockDividend` events, proportional
+    rescale with the residual in the last lot
+  - `src/ledger/transaction.rs`: kinds, accepted fields per kind,
+    `MovementKind`, effects
+  - `src/ledger/service.rs`: destination account and currency rules,
+    `NoHoldings`
+  - `src/http/{transactions,error}.rs`: DTOs, OpenAPI, `no_holdings`
+  - entity and migrations 7 and 8
+- **Tests (38 new, 251 in total):**
+  - **Unit:**
+    - each kind's fields and effects
+    - exact rounded division and ratio parsing
+    - FIFO splits, reverse splits, residuals, stock dividends, empty
+      holdings, lots rounding to zero
+  - **Integration:**
+    - exact movements and balances
+    - the net-amount rule
+    - dividends leave FIFO alone
+    - currency rules for dividends, transfers, FX and cash in lieu
+    - balanced transfers and the source-paid fee
+    - FX with fee
+    - destinations in another portfolio or of another user get the same
+      error as a missing one
+    - PUT changing the kind
+    - splits replayed after an edit or delete
+    - reverse split with cash in lieu
+    - stock dividend
+    - `no_holdings` on create and delete
+    - the destination FK `RESTRICT`
+  - **OpenAPI:** kinds and new fields
+- **Evidence:**
+  - **Mutation checks**, each failing at least one test:
+    - dropping the transfer-destination check
+    - flipping the withdrawal sign
+    - not giving the residual to the last lot (it survived at first, and
+      a test was added)
+    - inverting the split ratio
+    - not disposing of cash in lieu
+    - dropping the FX same-currency check
+  - **Upgrade:** a P3 database (built from `fc538e1`) upgrades through
+    migrations 7 and 8 and accepts the new kinds.
+  - **Not run:** Docker Compose (Docker is not installed on the dev
+    machine).
 - **Scope:**
   - Deposit, Withdrawal, Dividend/Distribution, Interest
   - Fee, Tax, Tax Return
@@ -788,15 +873,42 @@ P2A onward are *Proposed* until they are implemented.
   - stock-dividend cost reallocation
   - cash in lieu realizes P/L
   - transfer balance is preserved
-  - executed FX rates never leak into market FX
+  - executed FX rates never leak into market FX (P4 stores no rate; P5
+    must keep valuation away from executed amounts)
   - edits replay correctly
 - **Excluded:** spin-offs, mergers, rights issues, return of capital, and
   tax reporting.
 
 ### P5 — Valuation, FX & Asset Allocation
-- **Status:** Not started.
+- **Status:** ⏳ In progress.
+  - **Step 1, price and FX-rate storage:** done, verified locally (all
+    four CI commands, 267 tests) and committed.
+  - **Step 2, holdings, valuation and allocation:** next.
 - **Objective:** on-demand portfolio valuation in the base currency.
-- **Dependencies:** P3 and P4. Decision ADR-VAL-02 must be made first.
+- **Dependencies:** P3 and P4. Owner decisions (2026-10-30):
+  - ADR-VAL-02: a price is stale after 7 days, an FX rate after 3.
+  - ADR-NUM-05: P5 rounding (8 places for values, 4 for percentages).
+  - ADR-VAL-06: the storage is confirmed; with both a direct and an
+    inverse rate, the latest-dated wins, and the direct rate on a tie.
+- **Step 1 delivered:**
+  - migration `m20261030_000009_create_market_data`: `instrument_prices`
+    and `fx_rates` (ADR-VAL-06)
+  - `src/market_data/` (owner-scoped repository and service) and
+    `src/http/market_data.rs`; `ledger::decimal::Rate`
+  - CRUD under `/api/v1/instruments/{id}/prices` and `/api/v1/fx-rates`,
+    with date-range and currency filters; `409 price_exists` and
+    `fx_rate_exists`
+  - **Tests (16 new, `tests/market_data.rs` plus one unit test):** exact
+    decimals, latest-first order and filters, one per date (including a
+    concurrent insert), replace and delete, validation per field,
+    cross-user `404` for every operation, prices reachable only through
+    their own instrument, instrument deletion blocked by prices, CSRF and
+    session guards, `CHECK` on `source`, OpenAPI.
+  - **Evidence:**
+    - 7 mutations (owner guards, same-currency check, date range, order)
+      were each caught by a test.
+    - A P4 database upgrades through migration 9 (smoke-tested with the
+      P4 and P5 binaries; FKs are `RESTRICT`, unique indexes present).
 - **Scope:**
   - price and FX-rate storage and CRUD
   - holdings and cash balances at `as_of`
@@ -888,10 +1000,13 @@ P2A onward are *Proposed* until they are implemented.
   - [x] All ledger writes are atomic.
   - [x] Decimals are exact end to end.
 - **P4:**
-  - [ ] Every MVP transaction type posts correct movements.
-  - [ ] Corporate-action cost rules hold.
-  - [ ] Executed FX is separate from market FX.
+  - [x] Every MVP transaction type posts correct movements.
+  - [x] Corporate-action cost rules hold.
+  - [x] Executed FX is separate from market FX. (No market FX exists yet;
+        P5 must keep it that way.)
 - **P5:**
+  - [x] Prices and FX rates are user-entered, owner-scoped and exact
+        (step 1).
   - [ ] Valuation at `as_of` uses only data on or before that date.
   - [ ] Partial results are explicit.
   - [ ] Allocation is signed, with NPV ≤ 0 giving null.
@@ -916,7 +1031,7 @@ The strategy is risk-based testing with incremental development (ADR-QA-01).
 | OpenAPI | Assert paths, schemas, security schemes exist | `tests/http.rs` |
 | Migrations | Fresh-DB apply; constraint behaviour | `tests/database.rs` |
 
-Current suite after P3: **213 tests** (83 unit + 130 integration). All pass.
+Current suite after P5 step 1: **267 tests** (104 unit + 163 integration). All pass.
 
 Commands:
 
@@ -998,21 +1113,42 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
    provisionally.*
 10. **ADR-NUM-05:** confirm FIFO allocation rounding (half-to-even, 10
     places) and rejecting unrepresentable results. *Implemented
-    provisionally.* Rounding for P4/P5 operations is still open.
-11. **ADR-TXN-01:** modelling of Tax Return.
-12. **ADR-TXN-04:** fee placement for transfers and FX exchanges.
-13. **ADR-TXN-07:** stock-dividend and cash-in-lieu allocation and rounding.
-14. **ADR-VAL-02:** price and FX staleness threshold.
+    provisionally.* P5 rounding was answered 2026-10-30; P4 rounding is
+    still Proposed.
+11. ~~**ADR-TXN-01:** modelling of Tax Return.~~ Answered 2026-10-30: a
+    separate kind.
+12. ~~**ADR-TXN-04:** fee placement.~~ Answered 2026-10-30: follow
+    Snowball Analytics, with the fee always in the source currency.
+13. **ADR-TXN-07:** answered 2026-10-30: follow Snowball, else the
+    implementer's choice. Still to review: the rules chosen (`new:old`
+    ratio, proportional lots, 8-place rounding with the residual in the
+    last lot, cash in lieu through FIFO). The owner could not judge them
+    on 2026-10-30; they stay Proposed.
+14. ~~**ADR-VAL-02:** price and FX staleness threshold.~~ Answered
+    2026-10-30: stale after 7 days for prices and 3 days for FX rates.
 15. **ADR-CSV-02:** import staging model.
 16. **Performance:** limits for ledger replay on large portfolios.
 17. **ADR-AUTH-10 / AUTH-11:** account recovery and session cleanup, and
     their timing before production use.
+18. ~~**P4 cash transactions:** confirm the provisional shapes.~~ Confirmed
+    2026-10-30. The P4 schema (ADR-LEDG-02) is still Proposed.
+19. ~~**Dividends in another currency.**~~ Answered 2026-10-30: not
+    supported.
+20. ~~**Phase split.**~~ Answered 2026-10-30: two steps are fine.
+21. ~~**ADR-VAL-06:** direct or inverse rate.~~ Answered 2026-10-30: the
+    latest-dated of the two on or before `as_of`; the direct rate on a tie.
+22. ~~**ADR-VAL-06:** the price and FX-rate storage.~~ Confirmed
+    2026-10-30.
+23. ~~**Push access.**~~ Answered 2026-10-30: deliver through a pull
+    request instead of pushing to `main`.
 
 ## 23. Current Implementation Status
 
-Verified against the source and the tests. P0–P2B are also verified
-against GitHub Actions (commit `04bb1b9`). P3 is verified locally, and its
-commit and CI run are pending.
+Verified against the source and the tests. P0–P3 are also verified
+against GitHub Actions (P3: commit `fc538e1`). P4 is verified locally and
+committed as `d3d1c08` (cash transactions) and `988b9f2` (FX and
+corporate actions), and P5 step 1 is committed after them. They reach
+`main` through a pull request; record its CI run here.
 
 | Area | Status | Evidence |
 | --- | --- | --- |
@@ -1024,44 +1160,36 @@ commit and CI run are pending.
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 213 passing | `cargo test --locked` (local) |
+| Tests | ✅ 267 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
 | Ledger, FIFO (P3) | ✅ Done (provisional decisions) | migration `m20261024_000006`; `src/ledger/`; `src/http/transactions.rs`; `tests/{ledger,transactions_api,fifo_spec}.rs` |
-| Financial transactions (P4) | ❌ Not started | — |
-| Valuation, FX (P5) | ❌ Not started | — |
+| Financial transactions, corporate actions (P4) | ✅ Done (some rules provisional; committed, not pushed) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
+| Prices, FX rates (P5 step 1) | ✅ Done (committed, not yet merged) | migration `m20261030_000009`; `src/market_data/`; `src/http/market_data.rs`; `tests/market_data.rs` |
+| Valuation, allocation (P5 step 2) | ❌ Not started | — |
 | CSV (P6) | ❌ Not started | — |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Account recovery, session cleanup | ❌ Not started | ADR-AUTH-10/11 open |
 
 ## 24. Next Recommended Task
 
-**P4 — Financial Transactions & Corporate Actions.**
+1. **Review and merge the pull request** with P4 and P5 step 1, then
+   record its CI run in §1, §15, §17 and §23. Still to confirm: the
+   provisional P4 rules (§22, question 13; ADR-LEDG-02, ADR-NUM-05).
+2. **P5 step 2: holdings, valuation and allocation at `as_of`.**
+   - Everything is decided: staleness (ADR-VAL-02), rounding
+     (ADR-NUM-05), partial results (ADR-VAL-04), signed allocation
+     (ADR-VAL-05), direct or inverse rate (ADR-VAL-06).
 
-Prerequisites. These are owner decisions, and P4 code must not start
-without them:
+Implementation notes for P5:
 
-1. **ADR-TXN-01:** how a Tax Return is modelled.
-2. **ADR-TXN-04:** fee placement for cash transfers and FX exchanges.
-3. **ADR-TXN-07:** stock-dividend and cash-in-lieu allocation and
-   rounding.
-4. Rounding for the new P4 operations (ADR-NUM-05).
-5. Confirmation of the P3 provisional choices (§22: questions 7–10), and
-   the earlier P2A/P2B ones (questions 2–6).
-6. Start from a clean `main` with P3 committed and CI green. Then record
-   the P3 commit in §1, §15, §17 and §23.
+- **Holdings at `as_of`:** replay FIFO over movements dated on or before
+  `as_of` (`fifo::replay`), including splits and stock dividends.
+- **Cash at `as_of`:** sum cash movements in Rust (never SQL `SUM` over
+  decimal text).
+- **FX:** market FX rates are a new user-scoped table. Valuation must never
+  read `FX_EXCHANGE` amounts (ADR-TXN-04).
+- **Schema:** additive only; dates as date-only columns (ADR-DB-05).
 
-Implementation notes:
-
-- **Schema:** additive only (ADR-LEDG-02). New kinds need no migration for
-  the `kind` columns; transfers and FX exchanges post two cash movements
-  and add nullable transaction columns through `ADD COLUMN`.
-- **FIFO:** splits, reverse splits and stock dividends adjust existing
-  lots, so `fifo::Event` needs lot-adjusting variants. Total cost is
-  preserved by splits; cash in lieu realizes P/L on the allocated cost.
-- **Arithmetic:** keep using `exact_*` from `ledger::decimal`. The only
-  rounding is at boundaries the owner has defined.
-- **Writes:** reuse `ledger::service::write` (lock first, then replay).
-
-Out of scope for P4: valuation, prices and market FX (P5), and CSV (P6).
+Out of scope for P5: CSV import and export (P6).

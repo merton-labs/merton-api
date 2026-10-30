@@ -12,6 +12,7 @@ use crate::auth::{AuthError, FieldError};
 use crate::cash_accounts::CashAccountError;
 use crate::instruments::InstrumentError;
 use crate::ledger::service::LedgerError;
+use crate::market_data::MarketDataError;
 use crate::portfolios::PortfolioError;
 
 const PROBLEM_JSON: &str = "application/problem+json";
@@ -70,6 +71,7 @@ pub enum ApiError {
         detail: &'static str,
     },
     InsufficientHoldings(String),
+    NoHoldings(String),
     Validation(Vec<FieldError>),
     RateLimited(Duration),
     Overloaded,
@@ -109,6 +111,7 @@ impl ApiError {
                 "insufficient_holdings",
                 detail.clone(),
             ),
+            Self::NoHoldings(detail) => (StatusCode::CONFLICT, "no_holdings", detail.clone()),
             Self::EmailTaken => (
                 StatusCode::CONFLICT,
                 "email_taken",
@@ -236,6 +239,27 @@ impl From<InstrumentError> for ApiError {
     }
 }
 
+impl From<MarketDataError> for ApiError {
+    fn from(err: MarketDataError) -> Self {
+        match err {
+            MarketDataError::Validation(fields) => Self::Validation(fields),
+            MarketDataError::NotFound => Self::NotFound,
+            MarketDataError::PriceExists => Self::Conflict {
+                code: "price_exists",
+                detail: "The instrument already has a price on this date. Change that price instead.",
+            },
+            MarketDataError::FxRateExists => Self::Conflict {
+                code: "fx_rate_exists",
+                detail: "A rate for this currency pair already exists on this date. Change that rate instead.",
+            },
+            MarketDataError::Database(err) => {
+                tracing::error!(error = %err, "market data database error");
+                Self::Internal
+            }
+        }
+    }
+}
+
 impl From<CashAccountError> for ApiError {
     fn from(err: CashAccountError) -> Self {
         match err {
@@ -272,6 +296,13 @@ impl From<LedgerError> for ApiError {
             } => Self::InsufficientHoldings(format!(
                 "Holdings of instrument {instrument_id} would go negative on {trade_date}. \
                  Sell no more than is held at each point in history."
+            )),
+            LedgerError::NoHoldings {
+                instrument_id,
+                trade_date,
+            } => Self::NoHoldings(format!(
+                "Instrument {instrument_id} has no holding on {trade_date} for a split or \
+                 stock dividend to adjust."
             )),
             LedgerError::Database(err) => {
                 tracing::error!(error = %err, "ledger database error");
