@@ -204,7 +204,10 @@ pub struct TransactionResponse {
     pub updated_at: OffsetDateTime,
 }
 
-fn iso_date<S: serde::Serializer>(date: &Date, serializer: S) -> Result<S::Ok, S::Error> {
+pub(super) fn iso_date<S: serde::Serializer>(
+    date: &Date,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     serializer.collect_str(&format_args!(
         "{:04}-{:02}-{:02}",
         date.year(),

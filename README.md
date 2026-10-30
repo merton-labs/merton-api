@@ -7,7 +7,8 @@ Backend for **Merton**, an open-source, self-hosted, multi-user investment portf
 > accounts, and the transaction ledger (opening balances, buys and sells
 > with FIFO validation, deposits, withdrawals, dividends, interest, fees,
 > taxes and tax returns, cash transfers, FX exchanges, stock splits and
-> stock dividends) are implemented. Valuation and CSV import are not built
+> stock dividends) are implemented, along with manually entered
+> historical prices and FX rates. Valuation and CSV import are not built
 > yet. See
 > [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the roadmap and
 > [CLAUDE.md](CLAUDE.md) for contributor rules.
@@ -72,6 +73,16 @@ automatically before the server starts accepting requests.
 | GET    | `/api/v1/instruments/{id}` | cookie       | Get an own instrument                               |
 | PATCH  | `/api/v1/instruments/{id}` | cookie + CSRF | Update descriptive fields; `null` clears symbol/isin/exchange; quote currency is fixed |
 | DELETE | `/api/v1/instruments/{id}` | cookie + CSRF | Delete an unused instrument (`204`)                |
+| GET    | `/api/v1/instruments/{id}/prices` | cookie | List an instrument's prices, latest first (`limit`, `offset`, `from`, `to`) |
+| POST   | `/api/v1/instruments/{id}/prices` | cookie + CSRF | Record `{price_date, price}` in the quote currency; one per date |
+| GET    | `/api/v1/instruments/{id}/prices/{price_id}` | cookie | Get a price |
+| PUT    | `/api/v1/instruments/{id}/prices/{price_id}` | cookie + CSRF | Replace a price's date and value |
+| DELETE | `/api/v1/instruments/{id}/prices/{price_id}` | cookie + CSRF | Delete a price (`204`) |
+| GET    | `/api/v1/fx-rates` | cookie | List own FX rates, latest first (`limit`, `offset`, `base_currency`, `quote_currency`, `from`, `to`) |
+| POST   | `/api/v1/fx-rates` | cookie + CSRF | Record `{base_currency, quote_currency, rate_date, rate}`: 1 base = `rate` quote; one per pair and date |
+| GET    | `/api/v1/fx-rates/{id}` | cookie | Get an FX rate |
+| PUT    | `/api/v1/fx-rates/{id}` | cookie + CSRF | Replace an FX rate |
+| DELETE | `/api/v1/fx-rates/{id}` | cookie + CSRF | Delete an FX rate (`204`) |
 | GET    | `/api/v1/portfolios/{id}/cash-accounts` | cookie | List a portfolio's cash accounts           |
 | POST   | `/api/v1/portfolios/{id}/cash-accounts` | cookie + CSRF | Create `{name, currency}` (active portfolios only) |
 | GET    | `/api/v1/portfolios/{id}/cash-accounts/{account_id}` | cookie | Get a cash account          |
@@ -89,12 +100,18 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 `untrusted_origin`, `rate_limited`, `service_overloaded`, `not_found`,
 `portfolio_archived`, `portfolio_not_archived`, `portfolio_has_history`,
 `instrument_in_use`, `cash_account_in_use`, `insufficient_holdings`,
-`no_holdings`.
+`no_holdings`, `price_exists`, `fx_rate_exists`.
 
 Instruments use the asset classes `STOCK`, `ETF` and `MUTUAL_FUND`. Their
 symbol, ISIN and exchange are optional and need not be unique, and ISINs
 are checked against their check digit. Cash, including bank deposits, lives
 in cash accounts: a portfolio can have several, even in the same currency.
+
+Prices and FX rates are entered by hand (CSV import comes later); nothing is
+fetched automatically. A price is in its instrument's quote currency and
+may be zero; a rate must be greater than zero. Market FX rates are separate
+from the amounts recorded by `FX_EXCHANGE` transactions. An instrument with
+prices cannot be deleted (`409 instrument_in_use`).
 
 ### Ledger
 
@@ -286,6 +303,7 @@ src/
 ├── instruments/         # Instruments (asset class, identifiers, quote currency)
 ├── cash_accounts/       # Cash accounts, owned through their portfolio
 ├── ledger/              # Decimals, FIFO, transactions and their movements
+├── market_data/         # Historical instrument prices and FX rates
 ├── validation.rs        # Shared value types (names, currency codes)
 ├── pagination.rs        # Shared limit/offset paging
 ├── http/                # Router, handlers, extractors, errors, OpenAPI

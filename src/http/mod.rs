@@ -6,6 +6,7 @@ mod error;
 pub mod extract;
 mod health;
 mod instruments;
+mod market_data;
 mod portfolios;
 mod transactions;
 
@@ -52,6 +53,16 @@ use crate::app::AppState;
         transactions::get,
         transactions::replace,
         transactions::delete,
+        market_data::create_price,
+        market_data::list_prices,
+        market_data::get_price,
+        market_data::replace_price,
+        market_data::delete_price,
+        market_data::create_fx_rate,
+        market_data::list_fx_rates,
+        market_data::get_fx_rate,
+        market_data::replace_fx_rate,
+        market_data::delete_fx_rate,
     ),
     modifiers(&SessionCookieScheme),
     tags(
@@ -61,6 +72,7 @@ use crate::app::AppState;
         (name = "instruments", description = "The current user's instruments. Identity fields are optional and need not be unique."),
         (name = "cash-accounts", description = "Cash accounts inside a portfolio. Changes require an active portfolio."),
         (name = "transactions", description = "The portfolio ledger. Decimal values are JSON strings; FIFO history is validated on every change."),
+        (name = "market-data", description = "The current user's historical instrument prices and FX rates, entered manually. Decimal values are JSON strings."),
     ),
 )]
 pub struct ApiDoc;
@@ -130,6 +142,29 @@ pub fn router(state: AppState) -> Router {
                 .patch(instruments::update)
                 .delete(instruments::delete),
         )
+        .route(
+            "/{id}/prices",
+            get(market_data::list_prices).post(market_data::create_price),
+        )
+        .route(
+            "/{id}/prices/{price_id}",
+            get(market_data::get_price)
+                .put(market_data::replace_price)
+                .delete(market_data::delete_price),
+        )
+        .layer(no_store());
+
+    let fx_rates = Router::new()
+        .route(
+            "/",
+            get(market_data::list_fx_rates).post(market_data::create_fx_rate),
+        )
+        .route(
+            "/{id}",
+            get(market_data::get_fx_rate)
+                .put(market_data::replace_fx_rate)
+                .delete(market_data::delete_fx_rate),
+        )
         .layer(no_store());
 
     let api_v1 = Router::new()
@@ -137,7 +172,8 @@ pub fn router(state: AppState) -> Router {
         .route("/openapi.json", get(openapi_json))
         .nest("/auth", auth)
         .nest("/portfolios", portfolios)
-        .nest("/instruments", instruments);
+        .nest("/instruments", instruments)
+        .nest("/fx-rates", fx_rates);
 
     Router::new()
         .nest("/api/v1", api_v1)

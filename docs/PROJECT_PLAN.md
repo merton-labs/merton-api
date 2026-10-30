@@ -37,6 +37,7 @@ separate repository.
 | P2B (instruments, cash accounts) | Completed (`04bb1b9`, CI green; some decisions provisional) |
 | P3 (ledger, FIFO) | Completed (`fc538e1`, CI green; decisions provisional, see §17) |
 | P4 (financial transactions, corporate actions) | Completed (committed locally in two commits, not yet pushed or run in CI; some rules provisional, see §17) |
+| P5 (valuation, FX, allocation) | In progress: price and FX-rate storage done (committed, in a pull request with P4); valuation next |
 
 ## 2. Product Goals
 
@@ -133,6 +134,7 @@ src/
 ├── instruments/            # instrument types (asset class, ISIN), owner-scoped repository, service
 ├── cash_accounts/          # cash accounts owned through their portfolio
 ├── ledger/                 # decimal.rs, fifo.rs (pure), transaction.rs (validation, effects), repository, service
+├── market_data/            # instrument prices and FX rates: owner-scoped repository, service
 ├── validation.rs           # shared DisplayName, CurrencyCode, field-error collector
 ├── pagination.rs           # shared Page / Paged
 ├── auth/                   # framework-independent authentication logic
@@ -147,7 +149,7 @@ src/
 └── infrastructure/
     ├── database.rs         # pool + SQLite pragmas (only SQLite-specific code)
     ├── entities/           # user, user_session, portfolio, instrument, cash_account, transaction, position_movement, cash_movement
-    └── migrations/         # m20261024_000001 … m20261024_000006, m20261030_000007/8
+    └── migrations/         # m20261024_000001 … m20261024_000006, m20261030_000007 … m20261030_000009
 tests/
 ├── common/mod.rs           # TestApp harness: isolated in-memory SQLite per test
 ├── auth.rs  database.rs  http.rs  portfolios.rs  instruments.rs  cash_accounts.rs
@@ -185,8 +187,8 @@ Implemented tables are marked ✅; everything else is planned.
 | `transactions` ✅ | portfolio | P3, P4 | `kind`, `trade_date`, `sort_order`, optional instrument/cash account, decimal-text inputs, `note`; P4 adds kinds, `destination_cash_account_id`, `destination_amount`, `ratio`, `cash_in_lieu_quantity` |
 | `position_movements` ✅ | transaction | P3, P4 | `ACQUIRE`/`DISPOSE`, positive quantity, cost or net proceeds; P4 adds `SPLIT` and `STOCK_DIVIDEND` lot adjustments (source of holdings and FIFO lots) |
 | `cash_movements` ✅ | transaction | P3 | signed `amount_delta` per cash account (source of balances) |
-| `instrument_prices` | via instrument | P5 | date, price, source |
-| `fx_rates` | user | P5 | date, base/quote pair, rate, direction explicit |
+| `instrument_prices` ✅ | via instrument | P5 | `price_date`, decimal-text `price`, `source`; unique per instrument and date (ADR-VAL-06) |
+| `fx_rates` ✅ | user | P5 | `base_currency`, `quote_currency`, `rate_date`, decimal-text `rate` (1 base = rate quote), `source`; unique per owner, pair and date |
 | import records | user/portfolio | P6 | upload, mapping, row results, audit |
 
 The ledger's physical schema was implemented in P3 as **Proposed**
@@ -287,7 +289,10 @@ ADR-NUM-01 … NUM-05:
 - **P4 (Proposed):** cash, transfer and FX postings are exact. Splits and
   stock dividends round holdings half-to-even to 8 places, with the
   residual in the last lot; cost is never rounded.
-- **OPEN:** currency minor units, and rounding for P5 operations.
+- **P5 (Accepted, owner 2026-10-30):** valuation is exact until the end;
+  base-currency values and inverse-rate conversions round half-to-even to
+  8 places; allocation percentages to 4 places, not forced to sum to 100.
+- **OPEN:** currency minor units.
 
 ## 11. Market Data and FX
 
@@ -397,7 +402,7 @@ ADR-API-01 … API-06:
 | **P2B** | Instruments & Cash Accounts | ✅ Completed (`04bb1b9`, CI green) |
 | **P3** | Transaction Ledger & FIFO | ✅ Completed (`fc538e1`, CI green) |
 | **P4** | Financial Transactions & Corporate Actions | ✅ Completed (committed locally; record CI once pushed) |
-| **P5** | Valuation, FX & Asset Allocation | ⏳ Not started (next) |
+| **P5** | Valuation, FX & Asset Allocation | ⏳ In progress (price and FX-rate storage done) |
 | **P6** | CSV Import & Export | Not started |
 
 Phases are implemented in order. Do not merge phases, and do not pull
@@ -421,7 +426,7 @@ flowchart LR
 | P2B ✅ | P2A | Done; provisional choices await confirmation (ADR-INST-04, ADR-PORT-04, ADR-INST-02) |
 | P3 ✅ | P2B | Done; provisional choices await confirmation (ADR-LEDG-02, LEDG-07, LEDG-08, NUM-04, NUM-05) |
 | P4 ✅ | P3 | Done; provisional choices await confirmation (ADR-LEDG-02 schema, ADR-TXN-07 rules, ADR-NUM-05 P4 rounding) |
-| P5 | P3, P4 | ADR-VAL-02 answered (7 days for prices, 3 for FX); rounding for P5 operations (ADR-NUM-05) still open |
+| P5 ⏳ | P3, P4 | All decisions answered (ADR-VAL-02, VAL-06, NUM-05 for P5; 2026-10-30) |
 | P6 | P3, P4, P5 | ADR-CSV-02 staging model |
 
 ## 17. Phase Deliverables
@@ -875,10 +880,35 @@ P2A onward are *Proposed* until they are implemented.
   tax reporting.
 
 ### P5 — Valuation, FX & Asset Allocation
-- **Status:** Not started.
+- **Status:** ⏳ In progress.
+  - **Step 1, price and FX-rate storage:** done, verified locally (all
+    four CI commands, 267 tests) and committed.
+  - **Step 2, holdings, valuation and allocation:** next.
 - **Objective:** on-demand portfolio valuation in the base currency.
-- **Dependencies:** P3 and P4. ADR-VAL-02 was answered on 2026-10-30.
-  Rounding for P5 operations (ADR-NUM-05) is still open.
+- **Dependencies:** P3 and P4. Owner decisions (2026-10-30):
+  - ADR-VAL-02: a price is stale after 7 days, an FX rate after 3.
+  - ADR-NUM-05: P5 rounding (8 places for values, 4 for percentages).
+  - ADR-VAL-06: the storage is confirmed; with both a direct and an
+    inverse rate, the latest-dated wins, and the direct rate on a tie.
+- **Step 1 delivered:**
+  - migration `m20261030_000009_create_market_data`: `instrument_prices`
+    and `fx_rates` (ADR-VAL-06)
+  - `src/market_data/` (owner-scoped repository and service) and
+    `src/http/market_data.rs`; `ledger::decimal::Rate`
+  - CRUD under `/api/v1/instruments/{id}/prices` and `/api/v1/fx-rates`,
+    with date-range and currency filters; `409 price_exists` and
+    `fx_rate_exists`
+  - **Tests (16 new, `tests/market_data.rs` plus one unit test):** exact
+    decimals, latest-first order and filters, one per date (including a
+    concurrent insert), replace and delete, validation per field,
+    cross-user `404` for every operation, prices reachable only through
+    their own instrument, instrument deletion blocked by prices, CSRF and
+    session guards, `CHECK` on `source`, OpenAPI.
+  - **Evidence:**
+    - 7 mutations (owner guards, same-currency check, date range, order)
+      were each caught by a test.
+    - A P4 database upgrades through migration 9 (smoke-tested with the
+      P4 and P5 binaries; FKs are `RESTRICT`, unique indexes present).
 - **Scope:**
   - price and FX-rate storage and CRUD
   - holdings and cash balances at `as_of`
@@ -975,6 +1005,8 @@ P2A onward are *Proposed* until they are implemented.
   - [x] Executed FX is separate from market FX. (No market FX exists yet;
         P5 must keep it that way.)
 - **P5:**
+  - [x] Prices and FX rates are user-entered, owner-scoped and exact
+        (step 1).
   - [ ] Valuation at `as_of` uses only data on or before that date.
   - [ ] Partial results are explicit.
   - [ ] Allocation is signed, with NPV ≤ 0 giving null.
@@ -999,7 +1031,7 @@ The strategy is risk-based testing with incremental development (ADR-QA-01).
 | OpenAPI | Assert paths, schemas, security schemes exist | `tests/http.rs` |
 | Migrations | Fresh-DB apply; constraint behaviour | `tests/database.rs` |
 
-Current suite after P4: **251 tests** (103 unit + 148 integration). All pass.
+Current suite after P5 step 1: **267 tests** (104 unit + 163 integration). All pass.
 
 Commands:
 
@@ -1081,7 +1113,8 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
    provisionally.*
 10. **ADR-NUM-05:** confirm FIFO allocation rounding (half-to-even, 10
     places) and rejecting unrepresentable results. *Implemented
-    provisionally.* Rounding for P4/P5 operations is still open.
+    provisionally.* P5 rounding was answered 2026-10-30; P4 rounding is
+    still Proposed.
 11. ~~**ADR-TXN-01:** modelling of Tax Return.~~ Answered 2026-10-30: a
     separate kind.
 12. ~~**ADR-TXN-04:** fee placement.~~ Answered 2026-10-30: follow
@@ -1102,12 +1135,20 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
 19. ~~**Dividends in another currency.**~~ Answered 2026-10-30: not
     supported.
 20. ~~**Phase split.**~~ Answered 2026-10-30: two steps are fine.
+21. ~~**ADR-VAL-06:** direct or inverse rate.~~ Answered 2026-10-30: the
+    latest-dated of the two on or before `as_of`; the direct rate on a tie.
+22. ~~**ADR-VAL-06:** the price and FX-rate storage.~~ Confirmed
+    2026-10-30.
+23. ~~**Push access.**~~ Answered 2026-10-30: deliver through a pull
+    request instead of pushing to `main`.
 
 ## 23. Current Implementation Status
 
 Verified against the source and the tests. P0–P3 are also verified
 against GitHub Actions (P3: commit `fc538e1`). P4 is verified locally and
-committed as `d3d1c08` (cash transactions) and the commit after it (FX and corporate actions), not yet pushed.
+committed as `d3d1c08` (cash transactions) and `988b9f2` (FX and
+corporate actions), and P5 step 1 is committed after them. They reach
+`main` through a pull request; record its CI run here.
 
 | Area | Status | Evidence |
 | --- | --- | --- |
@@ -1119,28 +1160,27 @@ committed as `d3d1c08` (cash transactions) and the commit after it (FX and corpo
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 251 passing | `cargo test --locked` (local) |
+| Tests | ✅ 267 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
 | Ledger, FIFO (P3) | ✅ Done (provisional decisions) | migration `m20261024_000006`; `src/ledger/`; `src/http/transactions.rs`; `tests/{ledger,transactions_api,fifo_spec}.rs` |
 | Financial transactions, corporate actions (P4) | ✅ Done (some rules provisional; committed, not pushed) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
-| Valuation, FX (P5) | ❌ Not started | — |
+| Prices, FX rates (P5 step 1) | ✅ Done (committed, not yet merged) | migration `m20261030_000009`; `src/market_data/`; `src/http/market_data.rs`; `tests/market_data.rs` |
+| Valuation, allocation (P5 step 2) | ❌ Not started | — |
 | CSV (P6) | ❌ Not started | — |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Account recovery, session cleanup | ❌ Not started | ADR-AUTH-10/11 open |
 
 ## 24. Next Recommended Task
 
-1. **Push P4 and record CI.** Then record the CI run in §1, §15, §17
-   and §23. Still to confirm: the provisional P4 rules (§22, question 13;
-   ADR-LEDG-02, ADR-NUM-05).
-2. **P5 — Valuation, FX & Asset Allocation.**
-   - **ADR-VAL-02:** answered (stale after 7 days for prices, 3 for FX).
-   - **Still needed before valuation code:** rounding for P5 operations
-     (ADR-NUM-05): valuation, FX conversion and allocation percentages.
-     Price and FX-rate storage needs no rounding and can start first.
-   - Confirmation of the earlier provisional choices (§22, questions 2–10).
+1. **Review and merge the pull request** with P4 and P5 step 1, then
+   record its CI run in §1, §15, §17 and §23. Still to confirm: the
+   provisional P4 rules (§22, question 13; ADR-LEDG-02, ADR-NUM-05).
+2. **P5 step 2: holdings, valuation and allocation at `as_of`.**
+   - Everything is decided: staleness (ADR-VAL-02), rounding
+     (ADR-NUM-05), partial results (ADR-VAL-04), signed allocation
+     (ADR-VAL-05), direct or inverse rate (ADR-VAL-06).
 
 Implementation notes for P5:
 

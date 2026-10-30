@@ -2,7 +2,7 @@
 //!
 //! Values are parsed from strings with a strict grammar, kept at the scale
 //! they were entered with, and stored as canonical decimal text. Money,
-//! quantity and price are distinct types so they cannot be mixed up.
+//! quantity, price and rate are distinct types so they cannot be mixed up.
 
 use std::fmt;
 use std::str::FromStr;
@@ -170,6 +170,12 @@ ledger_decimal!(
     /// A per-unit price in the instrument's quote currency; zero or more.
     Price,
     Sign::NonNegative
+);
+ledger_decimal!(
+    /// A market FX rate: units of the quote currency per one unit of the
+    /// base currency; always greater than zero.
+    Rate,
+    Sign::Positive
 );
 ledger_decimal!(
     /// A non-negative amount of money, such as a fee, tax or cost basis.

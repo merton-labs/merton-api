@@ -334,6 +334,8 @@ Every decision uses the same fields:
   - `insufficient_holdings` (P3, `409`, with the date in `detail`)
   - `no_holdings` (P4, `409`): a split or stock dividend has no holding to
     adjust on its date
+  - `price_exists` and `fx_rate_exists` (P5, `409`): a price for that
+    instrument and date, or a rate for that pair and date, already exists
   - `internal_error`
 - **Consequences:** Never change an existing code's meaning. Never leak SQL
   errors, stack traces, secrets or other users' data; internal errors are
@@ -1138,6 +1140,15 @@ Every decision uses the same fields:
   such as display, settlement amounts and allocation residuals, and every
   operation validates against overflow.
 - **Open:** the rounding mode and scale for each operation.
+- **P5 valuation (Accepted · Source: Owner, 2026-10-30):**
+  - quantity × price and multiplying by an FX rate are exact; nothing is
+    rounded along the way;
+  - a base-currency value is rounded half-to-even to 8 places, once, at
+    the end;
+  - converting through an inverse pair (dividing by the rate) rounds
+    half-to-even to 8 places;
+  - allocation percentages round half-to-even to 4 places (`12.3457`) and
+    are not forced to add up to exactly 100.
 - **P4 operations: Proposed, implemented provisionally.**
   - Cash transactions, transfers and FX exchanges are exact sums; nothing
     is rounded.
@@ -1212,6 +1223,42 @@ Every decision uses the same fields:
   - If NPV ≤ 0, the percentages are `null`.
   - Negative cash is flagged, and is not interpreted as a margin loan.
   - Partial valuations do not present allocation as complete.
+
+### ADR-VAL-06 — Price and FX-rate storage (P5)
+- **Status:** Accepted · **Source:** Owner (2026-10-30), Implementation (P5) · **Phases:** P5, P6
+- **Schema** (migration `m20261030_000009_create_market_data`):
+  - **`instrument_prices`:** `instrument_id` (`ON DELETE RESTRICT`),
+    date-only `price_date`, decimal-text `price`, `source`. Unique on
+    (instrument, date). Prices belong to their instrument's owner.
+  - **`fx_rates`:** `owner_user_id` (`RESTRICT`), `base_currency`,
+    `quote_currency`, date-only `rate_date`, decimal-text `rate`, `source`.
+    Unique on (owner, base, quote, date).
+  - **`source`:** `MANUAL` (entered through the API) or `IMPORT` (P6), with
+    a `CHECK` constraint (ADR-DB-08). The API always sets `MANUAL`; an
+    edit keeps the original source.
+- **Values:**
+  - **Price:** in the instrument's quote currency, ≥ 0 (zero allows a
+    worthless or delisted holding).
+  - **Rate:** > 0. One `base_currency` is worth `rate` units of
+    `quote_currency`. Base and quote must differ.
+  - Both use the ledger's decimal limits (8 places, 15 integer digits;
+    ADR-NUM-04).
+  - **Dates:** 1900-01-01 to 2100-12-31, like trade dates.
+- **Pairs:** `USD/THB` and `THB/USD` are different pairs, so both can be
+  stored for one date.
+- **Direct or inverse (Accepted · Source: Owner, 2026-10-30):** to convert
+  USD to THB, valuation takes the latest-dated of the direct (`USD/THB`)
+  and inverse (`THB/USD`) rates on or before `as_of`. On the same date the
+  direct rate wins. An inverse rate is divided by, rounding half-to-even to
+  8 places (ADR-NUM-05).
+- **API:** `/api/v1/instruments/{id}/prices[/{price_id}]` and
+  `/api/v1/fx-rates[/{id}]`, with create, list (latest first, filtered by
+  inclusive `from`/`to` dates and, for rates, by currency), get, replace
+  (`PUT`) and delete.
+  - A duplicate date returns `409 price_exists` or `fx_rate_exists`; the
+    unique indexes enforce it under concurrency too.
+  - An instrument with prices cannot be deleted (`409 instrument_in_use`).
+  - Another user's instrument, price or rate is `404`.
 
 ---
 
@@ -1331,7 +1378,7 @@ Every decision uses the same fields:
 | ADR-LEDG-02 | Confirm the P3 ledger schema (implemented provisionally) | Confirmation only |
 | ADR-LEDG-07 | Confirm one OPENING_POSITION per lot (implemented provisionally) | Confirmation only |
 | ADR-LEDG-08 | Confirm `sort_order` semantics (implemented provisionally) | Confirmation only |
-| ADR-NUM-05 | Confirm FIFO allocation rounding (implemented provisionally); rounding for P5 operations | P5 |
+| ADR-NUM-05 | Confirm FIFO allocation rounding (implemented provisionally) | Confirmation only |
 | ADR-LEDG-02 | Confirm the P4 schema: `destination_cash_account_id`, `destination_amount`, `ratio`, `cash_in_lieu_quantity`, and the `SPLIT`/`STOCK_DIVIDEND` movements (implemented provisionally) | Confirmation only |
 | ADR-TXN-07 | Review the corporate-action rules chosen under the owner's delegation (`new:old` ratio, proportional lots, 8-place rounding, residual to the last lot, cash in lieu through FIFO). Owner could not judge them on 2026-10-30. | Confirmation only |
 | ADR-NUM-05 | Confirm the P4 rounding (holdings to 8 places after splits) | Confirmation only |

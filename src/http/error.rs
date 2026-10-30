@@ -12,6 +12,7 @@ use crate::auth::{AuthError, FieldError};
 use crate::cash_accounts::CashAccountError;
 use crate::instruments::InstrumentError;
 use crate::ledger::service::LedgerError;
+use crate::market_data::MarketDataError;
 use crate::portfolios::PortfolioError;
 
 const PROBLEM_JSON: &str = "application/problem+json";
@@ -232,6 +233,27 @@ impl From<InstrumentError> for ApiError {
             },
             InstrumentError::Database(err) => {
                 tracing::error!(error = %err, "instrument database error");
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<MarketDataError> for ApiError {
+    fn from(err: MarketDataError) -> Self {
+        match err {
+            MarketDataError::Validation(fields) => Self::Validation(fields),
+            MarketDataError::NotFound => Self::NotFound,
+            MarketDataError::PriceExists => Self::Conflict {
+                code: "price_exists",
+                detail: "The instrument already has a price on this date. Change that price instead.",
+            },
+            MarketDataError::FxRateExists => Self::Conflict {
+                code: "fx_rate_exists",
+                detail: "A rate for this currency pair already exists on this date. Change that rate instead.",
+            },
+            MarketDataError::Database(err) => {
+                tracing::error!(error = %err, "market data database error");
                 Self::Internal
             }
         }
