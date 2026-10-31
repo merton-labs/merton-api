@@ -1197,9 +1197,11 @@ still open below.
 Verified against the source and the tests. P0–P3 are also verified
 against GitHub Actions (P3: commit `fc538e1`). P4 and P5 are on `main`
 through PR #1 (merge `725023d`, run 41078791140) and PR #2 (merge
-`67c3d1d`, run 41083764335), both CI green. The session purge
-(ADR-AUTH-11) and the owner's confirmations are in a third pull request;
-record its CI run here once it is merged.
+`67c3d1d`, run 41083764335), both CI green. The session purge and the
+owner's confirmations followed in PR #3 (merge `a2bcbb9`, run
+41106885927), and the CI `docker` job in PR #4 (merge `b3ea53b`, run
+41176020573), both CI green. The `merton-web` frontend calls this API for
+every screen (merton-web PR #5).
 
 | Area | Status | Evidence |
 | --- | --- | --- |
@@ -1221,30 +1223,23 @@ record its CI run here once it is merged.
 | Holdings, valuation, allocation (P5 step 2) | ✅ Done (PR #2) | `src/valuation/`; `src/http/valuation.rs`; `tests/valuation.rs` |
 | CSV (P6) | ❌ Not started | — |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
-| Session purge | ✅ Done (PR #3, merge `a2bcbb9`) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
+| Session purge | ✅ Done (PR #3, merge `a2bcbb9`, run 41106885927) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
 | Account recovery | ➖ Not in the MVP | ADR-AUTH-10 (owner, 2026-10-31) |
-| Deployment & CI Docker smoke | 🟡 In review (branch `ci/docker-smoke`, not merged; CI not yet run) | `.github/workflows/ci.yml` (`docker` job); full-stack Compose + `merton-web/scripts/smoke.sh` passed locally 2026-10-31 |
+| Deployment & CI Docker smoke | ✅ Done (PR #4, merge `b3ea53b`, run 41176020573) | `.github/workflows/ci.yml` (`docker` job); full-stack Compose + `merton-web/scripts/smoke.sh` (passed locally 2026-10-31) |
 
 ## 24. Next Recommended Task
 
-1. **Merge the third pull request** (session purge and the owner's
-   2026-10-31 confirmations): merged as `a2bcbb9`.
-2. **The rest of the MVP, before P6** (the owner deferred CSV on
+1. **The rest of the MVP, before P6** (the owner deferred CSV on
    2026-10-30). Done on 2026-10-31: the session purge (ADR-AUTH-11), the
    replay measurement (§22, question 16), the decision on account
-   recovery (none in the MVP), and most confirmations. Still to do:
-   - **Deployment (in review):** the CI `docker` job in
-     `.github/workflows/ci.yml` (builds the image and checks
-     `GET /api/v1/health`) and the full-stack Docker Compose deployment
-     with `scripts/smoke.sh` in `merton-web` (Caddy reverse proxy,
-     `merton-web`, and `merton-api` on `http://localhost:8080`). The smoke
-     test passed locally on 2026-10-31; merge both branches and record
-     the CI runs in §23.
+   recovery (none in the MVP), most confirmations, and deployment (the CI
+   `docker` job and the full-stack Docker Compose stack in `merton-web`).
+   Still to do:
    - **Confirmations still open** (§22): ADR-INST-02 (question 6),
      ADR-NUM-04 grammar and sign rules (question 7), ADR-NUM-05 rejecting
      unrepresentable results (question 10), ADR-TXN-07 rules 5–6
      (question 13).
-3. **P6 — CSV Import & Export**, later. It still needs ADR-CSV-02, the
+2. **P6 — CSV Import & Export**, later. It still needs ADR-CSV-02, the
    staging model (§22, question 15).
 
 Implementation notes for P6:
