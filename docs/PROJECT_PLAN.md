@@ -1221,20 +1221,25 @@ record its CI run here once it is merged.
 | Holdings, valuation, allocation (P5 step 2) | ✅ Done (PR #2) | `src/valuation/`; `src/http/valuation.rs`; `tests/valuation.rs` |
 | CSV (P6) | ❌ Not started | — |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
-| Session purge | ✅ Done (third pull request) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
+| Session purge | ✅ Done (PR #3, merge `a2bcbb9`) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
 | Account recovery | ➖ Not in the MVP | ADR-AUTH-10 (owner, 2026-10-31) |
+| Deployment & CI Docker smoke | 🟡 In review (branch `ci/docker-smoke`, not merged; CI not yet run) | `.github/workflows/ci.yml` (`docker` job); full-stack Compose + `merton-web/scripts/smoke.sh` passed locally 2026-10-31 |
 
 ## 24. Next Recommended Task
 
 1. **Merge the third pull request** (session purge and the owner's
-   2026-10-31 confirmations), then record its CI run in §23.
+   2026-10-31 confirmations): merged as `a2bcbb9`.
 2. **The rest of the MVP, before P6** (the owner deferred CSV on
    2026-10-30). Done on 2026-10-31: the session purge (ADR-AUTH-11), the
    replay measurement (§22, question 16), the decision on account
    recovery (none in the MVP), and most confirmations. Still to do:
-   - **Deployment:** the owner runs the `docker compose up --build` smoke
-     test on a machine with Docker. A CI job that builds the image and
-     calls `/api/v1/health` comes later, when the owner asks for it.
+   - **Deployment (in review):** the CI `docker` job in
+     `.github/workflows/ci.yml` (builds the image and checks
+     `GET /api/v1/health`) and the full-stack Docker Compose deployment
+     with `scripts/smoke.sh` in `merton-web` (Caddy reverse proxy,
+     `merton-web`, and `merton-api` on `http://localhost:8080`). The smoke
+     test passed locally on 2026-10-31; merge both branches and record
+     the CI runs in §23.
    - **Confirmations still open** (§22): ADR-INST-02 (question 6),
      ADR-NUM-04 grammar and sign rules (question 7), ADR-NUM-05 rejecting
      unrepresentable results (question 10), ADR-TXN-07 rules 5–6

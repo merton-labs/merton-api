@@ -285,6 +285,8 @@ address. Serve the public site over HTTPS and keep `SESSION_COOKIE_SECURE=true`.
 
 ## Docker
 
+### Standalone API
+
 ```bash
 export APP_SECRET_KEY="$(openssl rand -base64 48)"   # or put it in .env
 docker compose up --build     # build and start
@@ -296,6 +298,25 @@ The API is published on `http://127.0.0.1:8080`. SQLite data is stored in the
 `merton-data` named volume, mounted at `/app/data`. The container runs as a
 non-root user. Compose refuses to start without `APP_SECRET_KEY`.
 
+### Full stack (with `merton-web`)
+
+`merton-web/compose.yaml` runs `merton-api`, `merton-web`, and a Caddy reverse
+proxy on the same origin (`http://localhost:8080`), routing `/api/*` to
+`api:8080` and everything else to `web:3000`:
+
+```bash
+cd ../merton-web
+cp .env.example .env          # set APP_SECRET_KEY (e.g. openssl rand -base64 48)
+docker compose up --build -d
+./scripts/smoke.sh            # health, OpenAPI, HTML root, and auth + CSRF round-trip
+```
+
+In `merton-web/compose.yaml`, the proxy has a static IP (`172.28.0.10`) on the
+compose network matching `TRUSTED_PROXIES`, `APP_TRUSTED_ORIGINS` is set to
+`http://localhost:8080`, and `SESSION_COOKIE_SECURE` remains at its default
+(`true`). Production deployments behind HTTPS must set `APP_TRUSTED_ORIGINS` to
+the public `https://` origin and keep `SESSION_COOKIE_SECURE=true`.
+
 ## Tests and checks
 
 ```bash
@@ -306,7 +327,8 @@ cargo test --locked
 ```
 
 Tests use an isolated in-memory SQLite database per test and need no external
-services. CI runs the same checks on every push to `main` and every pull request.
+services. CI runs the same checks on every push to `main` and every pull request,
+and also builds the Docker image and smoke-tests `GET /api/v1/health`.
 
 ## Project layout
 
