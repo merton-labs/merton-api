@@ -15,6 +15,7 @@ use crate::instruments::InstrumentError;
 use crate::ledger::service::LedgerError;
 use crate::market_data::MarketDataError;
 use crate::portfolios::PortfolioError;
+use crate::returns::ReturnsError;
 use crate::valuation::ValuationError;
 
 const PROBLEM_JSON: &str = "application/problem+json";
@@ -291,6 +292,19 @@ impl From<DividendsError> for ApiError {
             }]),
             DividendsError::Database(err) => {
                 tracing::error!(error = %err, "dividends database error");
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<ReturnsError> for ApiError {
+    fn from(err: ReturnsError) -> Self {
+        match err {
+            ReturnsError::Validation(fields) => Self::Validation(fields),
+            ReturnsError::NotFound => Self::NotFound,
+            ReturnsError::Database(err) => {
+                tracing::error!(error = %err, "returns database error");
                 Self::Internal
             }
         }

@@ -14,6 +14,10 @@ change between minor versions.
   holding or cash account, asset class and currency. Each payment is
   converted at the FX rate on its own date; payments without a rate are
   listed and the result is partial (ADR-DIV-01).
+- `GET /api/v1/portfolios/{id}/returns?as_of=`: per holding, open or sold,
+  the capital gain, realized P&L, dividends, fees, taxes, total profit and
+  their percentages in the quote currency, as in Snowball's Holdings table
+  (ADR-RET-01).
 
 ## [0.1.0] - 2026-11-01
 

@@ -255,6 +255,20 @@ pub async fn income_between(
     in_ledger_order(query).all(db).await
 }
 
+/// The transactions of an owned portfolio that name an instrument, dated on
+/// or before `as_of`, in ledger order.
+pub async fn with_instrument_until(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    portfolio_id: Uuid,
+    as_of: Date,
+) -> Result<Vec<transaction::Model>, DbErr> {
+    let query = in_owned_portfolio(owner, portfolio_id, None)
+        .filter(transaction::Column::InstrumentId.is_not_null())
+        .filter(transaction::Column::TradeDate.lte(as_of));
+    in_ledger_order(query).all(db).await
+}
+
 /// Every cash movement of an owned portfolio dated on or before `as_of`.
 pub async fn cash_until(
     db: &impl ConnectionTrait,
