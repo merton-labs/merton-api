@@ -104,6 +104,20 @@ Every decision uses the same fields:
   - The rule does not override Accepted decisions, the MVP exclusions
     (ADR-SCOPE-05), or the precision rules (ADR-NUM-01 … NUM-05).
 
+### ADR-SCOPE-09 — CSV import and export after the MVP
+- **Status:** Accepted · **Source:** Owner (2026-11-01) · **Phases:** P6
+- **Decision:** CSV import and export (P6) are moved out of the MVP. The
+  MVP ends with P5. Prices and FX rates are entered by hand until P6 is
+  scheduled.
+- **Consequences:**
+  - The CSV decisions (ADR-CSV-01 … CSV-05, ADR-INST-05) stay Accepted
+    and apply when P6 is scheduled. ADR-CSV-02's open detail no longer
+    blocks the MVP.
+  - The `IMPORT` value of `source` (ADR-VAL-06) stays in the schema,
+    unused until P6.
+  - Unlike ADR-SCOPE-05, this is a deferral, not an exclusion: P6 stays
+    on the roadmap.
+
 ---
 
 ## 2. Technology stack
@@ -1340,6 +1354,9 @@ Every decision uses the same fields:
 
 ## 14. CSV import and export
 
+These decisions apply to P6, which the owner moved out of the MVP on
+2026-11-01 (ADR-SCOPE-09).
+
 ### ADR-CSV-01 — Import and export types
 - **Status:** Accepted · **Source:** Owner · **Phases:** P6
 - **Decision:** Import covers transactions, historical instrument prices
@@ -1443,7 +1460,7 @@ Every decision uses the same fields:
 
 | ID | Topic | Blocks |
 | --- | --- | --- |
-| ADR-CSV-02 | Import staging model | P6 (deferred by the owner until the rest of the MVP is done) |
+| ADR-CSV-02 | Import staging model | P6, after the MVP (ADR-SCOPE-09); nothing in the MVP |
 
 Answered by the owner on 2026-10-31: ADR-ARCH-03, API-04, PORT-03, PORT-04,
 PORT-05, INST-04, NUM-04 (limits), NUM-05 (P3 and P4 rounding),
@@ -1452,3 +1469,5 @@ hard limit on ledger replay for the MVP. Answered on 2026-11-01, after
 comparing with the live Snowball Analytics app: INST-02 (deferring the
 metadata column), NUM-04 (grammar, sign rules, derived values, minor
 units), NUM-05 (rejecting unrepresentable results) and TXN-07 (rules 5–6).
+Also on 2026-11-01, the owner moved CSV import and export out of the MVP
+(ADR-SCOPE-09).
