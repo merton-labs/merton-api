@@ -1232,7 +1232,7 @@ every screen (merton-web PR #5).
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 296 passing | `cargo test --locked` (local) |
+| Tests | ✅ 307 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
@@ -1241,6 +1241,7 @@ every screen (merton-web PR #5).
 | Prices, FX rates (P5 step 1) | ✅ Done (PR #1) | migration `m20261030_000009`; `src/market_data/`; `src/http/market_data.rs`; `tests/market_data.rs` |
 | Holdings, valuation, allocation (P5 step 2) | ✅ Done (PR #2) | `src/valuation/`; `src/http/valuation.rs`; `tests/valuation.rs` |
 | CSV (P6) | ➖ Not in the MVP | ADR-SCOPE-09 (owner, 2026-11-01) |
+| Dividends received (after the MVP) | ✅ Done | ADR-DIV-01; `src/dividends/`; `src/http/dividends.rs`; `tests/dividends.rs` |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Session purge | ✅ Done (PR #3, merge `a2bcbb9`, run 41106885927) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
 | Account recovery | ➖ Not in the MVP | ADR-AUTH-10 (owner, 2026-10-31) |

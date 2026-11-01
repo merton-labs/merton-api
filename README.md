@@ -96,6 +96,7 @@ automatically before the server starts accepting requests.
 | GET    | `/api/v1/portfolios/{id}/holdings?as_of=` | cookie | Open positions (quantity, cost basis) and cash balances at a date |
 | GET    | `/api/v1/portfolios/{id}/valuation?as_of=` | cookie | Value in the base currency, with the price and FX rate used for each asset |
 | GET    | `/api/v1/portfolios/{id}/allocation?as_of=` | cookie | Signed allocation by asset class on Net Portfolio Value |
+| GET    | `/api/v1/portfolios/{id}/dividends?from=&to=` | cookie | Dividends and interest received after tax and fees, by month, source, class and currency |
 
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 (`application/problem+json`) with a stable `code` field, for example
@@ -136,6 +137,18 @@ prices cannot be deleted (`409 instrument_in_use`).
   cash of −2,000 give 125% and −25%; percentages are `null` when the Net
   Portfolio Value is zero or negative. Overdrawn cash is flagged, not
   treated as a margin loan.
+
+### Dividends received
+
+As in Snowball Analytics' "Dividends received" (ADR-DIV-01):
+
+- **What counts:** `DIVIDEND` and `INTEREST` transactions, each as amount
+  − tax − fee, between the optional `from` and `to` dates (inclusive).
+- **Currency:** each payment is converted to the base currency at the
+  latest rate on or before its own date, and rounded half-to-even to 8
+  places once. Totals add those values exactly.
+- **Missing rates:** a payment without a rate is listed under
+  `unconverted`, left out of every total, and the result is `partial`.
 
 ### Ledger
 
@@ -358,6 +371,7 @@ src/
 ├── ledger/              # Decimals, FIFO, transactions and their movements
 ├── market_data/         # Historical instrument prices and FX rates
 ├── valuation/           # Holdings, valuation and allocation at a date
+├── dividends/           # Dividends and interest received over a period
 ├── validation.rs        # Shared value types (names, currency codes)
 ├── pagination.rs        # Shared limit/offset paging
 ├── http/                # Router, handlers, extractors, errors, OpenAPI

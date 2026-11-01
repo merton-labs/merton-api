@@ -1439,6 +1439,41 @@ Every decision uses the same fields:
   negative cash, so the details above were proposed here and accepted by
   the owner.
 
+### ADR-DIV-01 — Dividends received (after the MVP)
+- **Status:** Accepted · **Source:** Owner (2026-11-01) · **Phases:** after the MVP
+- **Context:** Snowball Analytics' Analytics → Dividends page and its
+  dashboard show "Dividends received": a total and monthly or annual bars
+  for a period (all time, year to date, 12 trailing months, or a year), a
+  breakdown by holding, class or currency, and "Dividend growth" (each
+  month, one bar per year). Its tooltips say all sums are after tax.
+  Checked in the owner's account on 2026-11-01: with the display currency
+  switched to THB, past payments were converted at rates near their own
+  dates, not at today's rate.
+- **Decision:** `GET /api/v1/portfolios/{id}/dividends?from=&to=`
+  (both optional and inclusive) returns, in the base currency:
+  - the total and the totals by month, by holding or cash account, by
+    asset class (`CASH` for interest) and by payment currency;
+  - a payment is a `DIVIDEND` or an `INTEREST` transaction. Interest is
+    included because Snowball counts income from cash-like custom assets
+    as dividends, and the owner's Snowball portfolio imports that income
+    as interest on a cash account (owner, 2026-11-01);
+  - each payment counts amount − tax − fee, exactly (owner, 2026-11-01);
+  - each payment is converted at the latest rate on or before its own
+    date, choosing between the direct and inverse pairs as in
+    ADR-VAL-06, and rounded half-to-even to 8 places once (owner,
+    2026-11-01). Totals add those rounded values exactly;
+  - a payment without a rate is listed under `unconverted` with a reason,
+    left out of every total, and the result is `partial`; it is never
+    counted as zero (as in ADR-VAL-04).
+- **Not included:** Snowball's forward-looking figures (yield, expected
+  annual dividends, future payments, dividend rating), which need
+  automated market data (ADR-SCOPE-05), and its sector and category
+  breakdowns, which need instrument metadata Merton does not store.
+- **Consequences:** periods and charts are chosen by the client; the API
+  only filters by date. Checked against the owner's Snowball portfolio:
+  12 trailing months (2025-12-01 … 2026-11-30) total 1,466.3379, shown by
+  Snowball as $1,466.34.
+
 ---
 
 ## 14. CSV import and export

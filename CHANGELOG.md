@@ -5,6 +5,16 @@ All notable changes to merton-api are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0.0 the API may still
 change between minor versions.
 
+## [Unreleased]
+
+### Added
+
+- `GET /api/v1/portfolios/{id}/dividends?from=&to=`: dividends and interest
+  received after tax and fees, in the base currency, with totals by month,
+  holding or cash account, asset class and currency. Each payment is
+  converted at the FX rate on its own date; payments without a rate are
+  listed and the result is partial (ADR-DIV-01).
+
 ## [0.1.0] - 2026-11-01
 
 The first release: the MVP (phases P0–P5 in

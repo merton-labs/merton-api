@@ -250,6 +250,28 @@ fn fx_quote(as_of: Date, point: FxPoint) -> FxQuote {
     }
 }
 
+/// Converts an exact amount in `currency` to the base currency with
+/// `point`, the rate in force (unused when the currencies match). The
+/// result is rounded half-to-even to [`VALUE_SCALE`] places, once.
+pub fn convert(
+    amount: Decimal,
+    currency: &str,
+    base_currency: &str,
+    point: Option<FxPoint>,
+) -> Result<Decimal, UnvaluedReason> {
+    let value = if currency == base_currency {
+        mul_round(amount, Decimal::ONE, VALUE_SCALE)
+    } else {
+        let point = point.ok_or(UnvaluedReason::MissingFxRate)?;
+        if point.inverse {
+            signed_div_round(amount, point.rate, VALUE_SCALE)
+        } else {
+            mul_round(amount, point.rate, VALUE_SCALE)
+        }
+    };
+    value.ok_or(UnvaluedReason::OutOfRange)
+}
+
 /// Converts an exact amount in `currency` to the base currency.
 fn to_base(
     amount: Decimal,
@@ -258,21 +280,12 @@ fn to_base(
     as_of: Date,
     rates: &BTreeMap<String, FxPoint>,
 ) -> (Option<FxQuote>, Result<Decimal, UnvaluedReason>) {
-    if currency == base_currency {
-        let value = mul_round(amount, Decimal::ONE, VALUE_SCALE).ok_or(UnvaluedReason::OutOfRange);
-        return (None, value);
-    }
-    let Some(point) = rates.get(currency).copied() else {
-        return (None, Err(UnvaluedReason::MissingFxRate));
-    };
-    let value = if point.inverse {
-        signed_div_round(amount, point.rate, VALUE_SCALE)
-    } else {
-        mul_round(amount, point.rate, VALUE_SCALE)
-    };
+    let point = (currency != base_currency)
+        .then(|| rates.get(currency).copied())
+        .flatten();
     (
-        Some(fx_quote(as_of, point)),
-        value.ok_or(UnvaluedReason::OutOfRange),
+        point.map(|p| fx_quote(as_of, p)),
+        convert(amount, currency, base_currency, point),
     )
 }
 

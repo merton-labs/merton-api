@@ -10,6 +10,7 @@ use utoipa::ToSchema;
 
 use crate::auth::{AuthError, FieldError};
 use crate::cash_accounts::CashAccountError;
+use crate::dividends::DividendsError;
 use crate::instruments::InstrumentError;
 use crate::ledger::service::LedgerError;
 use crate::market_data::MarketDataError;
@@ -273,6 +274,23 @@ impl From<ValuationError> for ApiError {
             }]),
             ValuationError::Database(err) => {
                 tracing::error!(error = %err, "valuation database error");
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<DividendsError> for ApiError {
+    fn from(err: DividendsError) -> Self {
+        match err {
+            DividendsError::Validation(fields) => Self::Validation(fields),
+            DividendsError::NotFound => Self::NotFound,
+            DividendsError::OutOfRange => Self::Validation(vec![FieldError {
+                field: "to",
+                message: "the dividends in this range are too large to add up exactly".to_owned(),
+            }]),
+            DividendsError::Database(err) => {
+                tracing::error!(error = %err, "dividends database error");
                 Self::Internal
             }
         }
