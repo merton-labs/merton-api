@@ -2,9 +2,9 @@
 
 Backend for **Merton**, an open-source, self-hosted, multi-user investment portfolio tracker.
 
-> **Status: ledger.** The server foundation, local email/password accounts
-> with server-managed cookie sessions, private portfolios, instruments, cash
-> accounts, and the transaction ledger (opening balances, buys and sells
+> **Status: 0.1.0, the MVP** (see [CHANGELOG.md](CHANGELOG.md)). The
+> server foundation, local email/password accounts with server-managed
+> cookie sessions, private portfolios, instruments, cash accounts, and the transaction ledger (opening balances, buys and sells
 > with FIFO validation, deposits, withdrawals, dividends, interest, fees,
 > taxes and tax returns, cash transfers, FX exchanges, stock splits and
 > stock dividends) are implemented, along with manually entered
