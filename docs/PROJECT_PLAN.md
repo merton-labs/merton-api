@@ -791,8 +791,8 @@ P2A onward are *Proposed* until they are implemented.
 - **Status:** ✅ Completed. Verified locally: all four CI commands pass and
   there are 251 tests in total. It was delivered in two steps (the owner
   accepted the split) and committed on `main` as `d3d1c08` (cash transactions) and the commit after it (FX and corporate actions). Step 1 alone
-  also passed all four commands (230 tests). Not yet pushed; record the CI
-  run here once it is.
+  also passed all four commands (230 tests). Merged to `main` in PR #1
+  (`725023d`, CI run 41078791140).
 - **Objective:** the remaining MVP transaction types.
 - **Dependencies:** P3. Owner decisions (2026-10-30):
   - ADR-TXN-01: Tax Return is its own kind.
