@@ -1474,6 +1474,48 @@ Every decision uses the same fields:
   12 trailing months (2025-12-01 … 2026-11-30) total 1,466.3379, shown by
   Snowball as $1,466.34.
 
+### ADR-RET-01 — Returns per holding (after the MVP)
+- **Status:** Accepted · **Source:** Owner (2026-11-02) · **Phases:** after the MVP
+- **Context:** Snowball Analytics' Holdings table shows, per holding, Cost
+  basis, Current value, Div. received ("total dividends received after
+  tax"), Capital gain ("profit only from the growth of the asset price"),
+  Realized P&L, Total profit, Daily and IRR, and a "Show sold" switch. Its
+  Total profit tooltip breaks the figure down; checked in the owner's
+  account on 2026-11-02: AMZN = capital gain 1.24 + realized P&L 582.57 −
+  fees paid 4.31 = 579.51, where 4.31 is every trade fee on AMZN, sold lots
+  included. Total profit % divides by the cost of every purchase (AMZN:
+  579.51 ÷ 3,590.66 = 16.14%).
+- **Decision:** `GET /api/v1/portfolios/{id}/returns?as_of=` returns every
+  instrument held on or before `as_of`, open or sold, in its quote
+  currency (owner, 2026-11-02):
+  - **Capital gain** = market value − cost basis of the open lots; zero for
+    a sold position.
+  - **Total profit** = capital gain + realized P&L (FIFO, before fees) +
+    dividends after their tax and fee − fees − taxes. Fees are the fees on
+    buys and sells plus `FEE` and `OTHER_EXPENSE` entries linked to the
+    instrument; taxes are the taxes on buys and sells plus linked `TAX`
+    entries, less linked `TAX_RETURN` entries.
+  - **Percentages:** capital gain ÷ cost basis and total profit ÷ the cost
+    of every purchase and opening position (without fees), × 100, rounded
+    half-to-even to 4 places as for allocation; `null` when the divisor is
+    not positive. **Average cost** = cost basis ÷ quantity, rounded
+    half-to-even to 8 places. Every other figure is exact.
+  - An open position without a price has no market value, capital gain or
+    total profit (`MISSING_PRICE`), and the result is `partial`; it is
+    never valued at zero (as in ADR-VAL-04).
+- **Not included (owner, 2026-11-02):** figures in the base currency
+  (Snowball's "In USD" mode, which needs the FX rate on every purchase
+  date); Daily, which needs daily prices; and IRR, an advanced performance
+  analytic excluded by ADR-SCOPE-05.
+- **Checked** against the owner's Snowball portfolio on 2026-11-02: cost
+  basis, capital gain, dividends, realized P&L, fees, total profit and
+  both percentages match for every open holding but V. **Known
+  difference:** for V, Snowball shows a cost basis 1.39 lower (1,935.85
+  against FIFO's 1,937.24) and dividends 1.39 higher (8.14 against 6.75)
+  than its own transactions give, 1.39 being the cost of the first lot,
+  sold in full in January 2025. Its capital gain (612.35) agrees with
+  Merton, so total profit differs by 1.39 (619.24 against 617.85).
+
 ---
 
 ## 14. CSV import and export

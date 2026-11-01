@@ -289,6 +289,16 @@ fn to_base(
     )
 }
 
+/// The price quote for `as_of`, flagged stale after [`PRICE_STALE_DAYS`].
+pub fn quote_price(as_of: Date, point: PricePoint) -> PriceQuote {
+    PriceQuote {
+        price: point.price,
+        date: point.date,
+        source: point.source,
+        stale: is_stale(as_of, point.date, PRICE_STALE_DAYS),
+    }
+}
+
 fn value_position(
     position: Position,
     base_currency: &str,
@@ -305,12 +315,7 @@ fn value_position(
             unvalued: Some(UnvaluedReason::MissingPrice),
         };
     };
-    let price = Some(PriceQuote {
-        price: point.price,
-        date: point.date,
-        source: point.source,
-        stale: is_stale(as_of, point.date, PRICE_STALE_DAYS),
-    });
+    let price = Some(quote_price(as_of, point));
     let Some(market_value) = exact_mul(position.quantity, point.price) else {
         return ValuedPosition {
             position,

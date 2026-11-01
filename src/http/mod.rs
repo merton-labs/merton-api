@@ -9,6 +9,7 @@ mod health;
 mod instruments;
 mod market_data;
 mod portfolios;
+mod returns;
 mod transactions;
 mod valuation;
 
@@ -68,6 +69,7 @@ use crate::app::AppState;
         valuation::holdings,
         valuation::valuation,
         valuation::allocation,
+        returns::returns,
         dividends::dividends,
     ),
     modifiers(&SessionCookieScheme),
@@ -78,7 +80,7 @@ use crate::app::AppState;
         (name = "instruments", description = "The current user's instruments. Identity fields are optional and need not be unique."),
         (name = "cash-accounts", description = "Cash accounts inside a portfolio. Changes require an active portfolio."),
         (name = "transactions", description = "The portfolio ledger. Decimal values are JSON strings; FIFO history is validated on every change."),
-        (name = "valuation", description = "Holdings, valuation and allocation at an explicit `as_of` date, computed on request. Partial results are marked and list what could not be valued."),
+        (name = "valuation", description = "Holdings, valuation, allocation and returns at an explicit `as_of` date, computed on request. Partial results are marked and list what could not be valued."),
         (name = "dividends", description = "Dividends and interest received, after tax and fees, in the base currency. Each payment is converted at the FX rate on its own date; payments without a rate are listed, never counted as zero."),
         (name = "market-data", description = "The current user's historical instrument prices and FX rates, entered manually. Decimal values are JSON strings."),
     ),
@@ -137,6 +139,7 @@ pub fn router(state: AppState) -> Router {
         .route("/{id}/holdings", get(valuation::holdings))
         .route("/{id}/valuation", get(valuation::valuation))
         .route("/{id}/allocation", get(valuation::allocation))
+        .route("/{id}/returns", get(returns::returns))
         .route("/{id}/dividends", get(dividends::dividends))
         .route(
             "/{id}/cash-accounts/{account_id}",

@@ -12,5 +12,6 @@ pub mod ledger;
 pub mod market_data;
 pub mod pagination;
 pub mod portfolios;
+pub mod returns;
 pub mod validation;
 pub mod valuation;

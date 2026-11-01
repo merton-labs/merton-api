@@ -97,6 +97,7 @@ automatically before the server starts accepting requests.
 | GET    | `/api/v1/portfolios/{id}/valuation?as_of=` | cookie | Value in the base currency, with the price and FX rate used for each asset |
 | GET    | `/api/v1/portfolios/{id}/allocation?as_of=` | cookie | Signed allocation by asset class on Net Portfolio Value |
 | GET    | `/api/v1/portfolios/{id}/dividends?from=&to=` | cookie | Dividends and interest received after tax and fees, by month, source, class and currency |
+| GET    | `/api/v1/portfolios/{id}/returns?as_of=` | cookie | Capital gain, realized P&L, dividends, fees, taxes and total profit per holding, open or sold |
 
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details
 (`application/problem+json`) with a stable `code` field, for example
@@ -149,6 +150,21 @@ As in Snowball Analytics' "Dividends received" (ADR-DIV-01):
   places once. Totals add those values exactly.
 - **Missing rates:** a payment without a rate is listed under
   `unconverted`, left out of every total, and the result is `partial`.
+
+### Returns per holding
+
+As in Snowball Analytics' Holdings table (ADR-RET-01), in each instrument's
+quote currency, for every instrument held on or before `as_of`:
+
+- **Capital gain:** market value − cost basis of the open lots.
+- **Total profit:** capital gain + realized P&L + dividends after tax −
+  fees − taxes. Fees and taxes include those on buys and sells and the
+  `FEE`, `OTHER_EXPENSE`, `TAX` and `TAX_RETURN` entries linked to the
+  instrument.
+- **Percentages:** capital gain over cost basis, and total profit over the
+  cost of every purchase, rounded half-to-even to 4 places; `null` when
+  that cost is zero. Average cost has 8 places.
+- **Sold positions** are listed after open ones, with zero capital gain.
 
 ### Ledger
 
@@ -372,6 +388,7 @@ src/
 ├── market_data/         # Historical instrument prices and FX rates
 ├── valuation/           # Holdings, valuation and allocation at a date
 ├── dividends/           # Dividends and interest received over a period
+├── returns/             # Capital gain and total profit per holding
 ├── validation.rs        # Shared value types (names, currency codes)
 ├── pagination.rs        # Shared limit/offset paging
 ├── http/                # Router, handlers, extractors, errors, OpenAPI
