@@ -12,6 +12,7 @@ mod m20261024_000006_create_ledger;
 mod m20261030_000007_add_transfer_destination;
 mod m20261030_000008_add_exchange_and_corporate_actions;
 mod m20261030_000009_create_market_data;
+mod m20261101_000010_exclude_fees_from_cost_basis;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait, async_trait};
 
@@ -30,6 +31,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261030_000007_add_transfer_destination::Migration),
             Box::new(m20261030_000008_add_exchange_and_corporate_actions::Migration),
             Box::new(m20261030_000009_create_market_data::Migration),
+            Box::new(m20261101_000010_exclude_fees_from_cost_basis::Migration),
         ]
     }
 }

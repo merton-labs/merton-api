@@ -46,7 +46,8 @@ pub struct Position {
     pub asset_class: AssetClass,
     pub quote_currency: String,
     pub quantity: Decimal,
-    /// Cost of the open lots, in the quote currency (ADR-LEDG-10).
+    /// Cost of the open lots, in the quote currency, without fees or taxes
+    /// (ADR-LEDG-11).
     pub cost_basis: Decimal,
 }
 

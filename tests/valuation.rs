@@ -214,6 +214,45 @@ async fn holdings_replay_only_history_on_or_before_as_of() {
 }
 
 #[tokio::test]
+async fn fees_and_taxes_stay_out_of_cost_basis_but_move_cash() {
+    // As in Snowball Analytics (ADR-LEDG-11).
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let portfolio = app.portfolio(&alice, "USD").await;
+    let account = app.account(&alice, &portfolio, "USD").await;
+    let bil = app.stock(&alice, "BIL", "ETF", "USD").await;
+
+    app.record(&alice, &portfolio, opening_cash(&account, "1000"))
+        .await;
+    let mut purchase = buy(&bil, "2026-01-02", "10", "35");
+    purchase["cash_account_id"] = json!(account);
+    purchase["fee"] = json!("5");
+    purchase["tax"] = json!("1");
+    app.record(&alice, &portfolio, purchase).await;
+    app.record(
+        &alice,
+        &portfolio,
+        json!({
+            "kind": "SELL", "trade_date": "2026-01-10", "instrument_id": bil,
+            "quantity": "4", "price": "40", "fee": "2", "cash_account_id": account,
+        }),
+    )
+    .await;
+
+    let bought = app
+        .report_ok(&alice, &portfolio, "holdings", "2026-01-02")
+        .await;
+    assert_eq!(by_instrument(&bought, &bil)["cost_basis"], "350");
+    assert_eq!(bought["cash"][0]["balance"], "644"); // 1000 − 350 − 5 − 1
+
+    let sold = app
+        .report_ok(&alice, &portfolio, "holdings", "2026-01-10")
+        .await;
+    assert_eq!(by_instrument(&sold, &bil)["cost_basis"], "210"); // 6 × 35
+    assert_eq!(sold["cash"][0]["balance"], "802"); // + 160 − 2
+}
+
+#[tokio::test]
 async fn closed_positions_are_not_listed() {
     let app = TestApp::new().await;
     let alice = user(&app, "alice@example.com").await;

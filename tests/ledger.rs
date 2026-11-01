@@ -9,8 +9,10 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::{Req, TestApp, TestResponse};
 use merton_api::infrastructure::entities::{cash_movement, position_movement, transaction};
+use merton_api::infrastructure::migrations::Migrator;
 use rust_decimal::Decimal;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter, Statement};
+use sea_orm_migration::MigratorTrait;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -200,7 +202,8 @@ async fn trades_post_exact_position_and_cash_movements() {
     let alice = user(&app, "alice@example.com").await;
     let book = app.book(&alice).await;
 
-    // Buy: 10 × 35.25 = 352.50; cost = 352.50 + 15.50 + 1.09 = 369.09.
+    // Buy: the lot costs 10 × 35.25 = 352.50 (ADR-LEDG-11); cash pays
+    // 352.50 + 15.50 + 1.09 = 369.09.
     let bought = app
         .record(
             &alice,
@@ -221,11 +224,12 @@ async fn trades_post_exact_position_and_cash_movements() {
             position.quantity.as_str(),
             position.amount.as_str()
         ),
-        ("ACQUIRE", "10", "369.09")
+        ("ACQUIRE", "10", "352.50")
     );
     assert_eq!(app.cash_rows(&buy_id).await[0].amount_delta, "-369.09");
 
-    // Sell: 4 × 40 = 160; proceeds = 160 − 2 − 0.50 = 157.50.
+    // Sell: the disposal is valued at 4 × 40 = 160; cash receives
+    // 160 − 2 − 0.50 = 157.50.
     let sold = app
         .record(
             &alice,
@@ -245,9 +249,48 @@ async fn trades_post_exact_position_and_cash_movements() {
             position.quantity.as_str(),
             position.amount.as_str()
         ),
-        ("DISPOSE", "4", "157.50")
+        ("DISPOSE", "4", "160")
     );
     assert_eq!(app.cash_rows(&sell_id).await[0].amount_delta, "157.50");
+}
+
+#[tokio::test]
+async fn migration_10_moves_trade_charges_out_of_stored_amounts() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+    let bought = app
+        .record(
+            &alice,
+            &book,
+            json!({
+                "kind": "BUY", "trade_date": "2026-01-10", "instrument_id": book.instrument,
+                "cash_account_id": book.cash, "quantity": "10", "price": "35.25",
+                "fee": "15.50", "tax": "1.09",
+            }),
+        )
+        .await;
+    let sold = app
+        .record(
+            &alice,
+            &book,
+            json!({
+                "kind": "SELL", "trade_date": "2026-02-01", "instrument_id": book.instrument,
+                "quantity": "4", "price": "40", "fee": "2", "tax": "0.50",
+            }),
+        )
+        .await;
+    let (buy_id, sell_id) = (id_of(&bought), id_of(&sold));
+
+    // Rolled back, the rows hold the pre-ADR-LEDG-11 amounts.
+    Migrator::down(app.db(), Some(1)).await.unwrap();
+    assert_eq!(app.position_rows(&buy_id).await[0].amount, "369.09");
+    assert_eq!(app.position_rows(&sell_id).await[0].amount, "157.50");
+
+    Migrator::up(app.db(), None).await.unwrap();
+    assert_eq!(app.position_rows(&buy_id).await[0].amount, "352.50");
+    assert_eq!(app.position_rows(&sell_id).await[0].amount, "160");
+    assert_eq!(app.cash_rows(&buy_id).await[0].amount_delta, "-369.09");
 }
 
 #[tokio::test]
@@ -290,14 +333,18 @@ async fn decimals_round_trip_exactly_as_text() {
             &alice,
             &book,
             with(
-                buy(
-                    &book,
-                    "2026-01-10",
-                    "0.00000001",
-                    "999999999999999.99999999",
+                with(
+                    buy(
+                        &book,
+                        "2026-01-10",
+                        "0.00000001",
+                        "999999999999999.99999999",
+                    ),
+                    "fee",
+                    json!("0.10"),
                 ),
-                "fee",
-                json!("0.10"),
+                "cash_account_id",
+                json!(book.cash),
             ),
         )
         .await;
@@ -307,9 +354,14 @@ async fn decimals_round_trip_exactly_as_text() {
     assert_eq!(response.body["fee"], "0.10");
     assert_eq!(response.body["tax"], "0");
 
-    // 0.00000001 × 999999999999999.99999999 = 9999999.9999999999999999; + 0.10.
+    // 0.00000001 × 999999999999999.99999999 = 9999999.9999999999999999, and
+    // cash pays 0.10 more.
     let position = &app.position_rows(&id_of(&response)).await[0];
-    assert_eq!(position.amount, "10000000.0999999999999999");
+    assert_eq!(position.amount, "9999999.9999999999999999");
+    assert_eq!(
+        app.cash_rows(&id_of(&response)).await[0].amount_delta,
+        "-10000000.0999999999999999"
+    );
     let db = app.db();
     let row = db
         .query_one_raw(Statement::from_string(

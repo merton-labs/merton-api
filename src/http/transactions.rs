@@ -88,6 +88,7 @@ impl From<TransactionKind> for TransactionKindDto {
 /// - `OPENING_CASH`: `cash_account_id`, `amount` (signed starting balance).
 /// - `BUY` / `SELL`: `instrument_id`, `quantity`, `price`; optional `fee`, `tax`
 ///   (default 0) and `cash_account_id` (must use the instrument's quote currency).
+///   Fees and taxes move cash but stay out of cost basis.
 /// - `DEPOSIT` / `WITHDRAWAL` / `FEE` / `TAX` / `TAX_RETURN`: `cash_account_id`,
 ///   `amount` (> 0). A deposit or tax return adds to the account; the others
 ///   take from it.
