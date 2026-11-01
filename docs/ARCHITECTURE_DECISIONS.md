@@ -872,6 +872,9 @@ Every decision uses the same fields:
   - Buy: cost = quantity × price + fee + tax, and cash moves by −cost.
   - Sell: proceeds = quantity × price − fee − tax, and cash moves by
     +proceeds.
+  - *Since ADR-LEDG-11 (2026-11-01):* the cash amounts above still apply,
+    but the position movement carries quantity × price, without fees or
+    taxes.
   - Every amount is computed exactly with checked arithmetic. Net proceeds
     may be negative, which records a loss.
 
@@ -927,10 +930,51 @@ Every decision uses the same fields:
     concurrent writers (such as PostgreSQL); it is not covered by a test.
 
 ### ADR-LEDG-10 — Economic cost basis only
-- **Status:** Accepted · **Source:** Owner · **Phases:** P3, P4
-- **Decision:** The system computes economic cost basis, which includes
+- **Status:** Superseded by ADR-LEDG-11 (owner, 2026-11-01) · **Source:** Owner · **Phases:** P3, P4
+- **Decision (historical):** The system computes economic cost basis, which includes
   trading fees and taxes. It is kept distinct from jurisdiction-specific
   taxable cost basis. There is no country-specific tax reporting engine.
+- **Compared with Snowball Analytics (observed 2026-11-01):** Snowball
+  leaves buy fees out of cost basis. It reports them separately
+  (`commissionPaid`) and takes them off profit as their own line
+  (`profitFee`).
+  - **Evidence:** the owner's "USA Dime" portfolio, imported into Merton
+    (255 transactions). Every open quantity and the total market value
+    matched. Cost basis was $10.03 higher in Merton (26,442.70 against
+    26,432.67), and each difference equals the fees of the lots still
+    open. For example, BIL's average cost in Snowball is 91.4765, exactly
+    the buy price of its open lot; Merton adds that lot's share of the
+    $6.76 fee (+$4.89).
+  - In principle total profit is the same either way, and only cost
+    basis, average cost and unrealized gain differ (not checked against
+    Snowball's profit figures).
+- **Answered (owner, 2026-11-01):** follow Snowball; see ADR-LEDG-11.
+
+### ADR-LEDG-11 — Fees and taxes stay out of cost basis
+- **Status:** Accepted · **Source:** Owner (2026-11-01) · **Phases:** P3, P4
+- **Decision:** follow Snowball Analytics. A trade's fees and taxes move
+  cash but are not part of cost basis.
+  - **Buy:** the lot costs quantity × price. Cash pays quantity × price +
+    fee + tax.
+  - **Sell:** the disposal is valued at quantity × price. Cash receives
+    quantity × price − fee − tax.
+  - Opening positions, splits and stock dividends are unchanged.
+  - The owner's standing direction: where Merton differs from Snowball,
+    match Snowball first.
+- **Rationale:** Snowball keeps average cost equal to the prices paid and
+  reports fees as their own line (ADR-LEDG-10 has the evidence). Snowball's
+  trade form has a single Fee field. Merton also accepts a tax, and treats
+  it the same way.
+- **Consequences:**
+  - Migration `m20261101_000010` rewrites the stored position movement of
+    every existing buy and sell to quantity × price. Its `down` restores
+    the old amounts.
+  - Cash balances do not change.
+  - The API does not report realized profit or fees paid yet. When it
+    does, follow Snowball: sale profit on gross values, with fees as a
+    separate figure.
+  - This supersedes ADR-LEDG-06's P3 cost and proceeds formulas for
+    position movements. Its cash formulas still apply.
 
 ---
 
@@ -1461,7 +1505,6 @@ These decisions apply to P6, which the owner moved out of the MVP on
 | ID | Topic | Blocks |
 | --- | --- | --- |
 | ADR-CSV-02 | Import staging model | P6, after the MVP (ADR-SCOPE-09); nothing in the MVP |
-
 Answered by the owner on 2026-10-31: ADR-ARCH-03, API-04, PORT-03, PORT-04,
 PORT-05, INST-04, NUM-04 (limits), NUM-05 (P3 and P4 rounding),
 LEDG-02, LEDG-07, LEDG-08, TXN-07 (rules 1–4), AUTH-10, AUTH-11, and no
@@ -1470,4 +1513,5 @@ comparing with the live Snowball Analytics app: INST-02 (deferring the
 metadata column), NUM-04 (grammar, sign rules, derived values, minor
 units), NUM-05 (rejecting unrepresentable results) and TXN-07 (rules 5–6).
 Also on 2026-11-01, the owner moved CSV import and export out of the MVP
-(ADR-SCOPE-09).
+(ADR-SCOPE-09), and took fees and taxes out of cost basis to match
+Snowball (ADR-LEDG-11, superseding LEDG-10).

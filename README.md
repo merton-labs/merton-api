@@ -147,7 +147,8 @@ prices cannot be deleted (`409 instrument_in_use`).
   - `OPENING_CASH`: `cash_account_id` and a signed `amount`.
   - `BUY` and `SELL`: `instrument_id`, `quantity` and `price`, with optional
     `fee`, `tax` and `cash_account_id`. The cash account must use the
-    instrument's quote currency.
+    instrument's quote currency. Fees and taxes move cash but stay out of
+    cost basis, as in Snowball Analytics.
   - `DEPOSIT`, `WITHDRAWAL`, `FEE`, `TAX` and `TAX_RETURN`:
     `cash_account_id` and a positive `amount`. A deposit or tax return adds
     to the account; the others take from it.

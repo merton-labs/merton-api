@@ -625,8 +625,11 @@ impl ValidTransaction {
     /// The movements this transaction posts. All arithmetic is exact:
     /// a result that would overflow or need rounding is rejected.
     ///
-    /// - Buy: cost = quantity × price + fee + tax; cash −cost.
-    /// - Sell: proceeds = quantity × price − fee − tax; cash +proceeds.
+    /// - Buy: the lot costs quantity × price; fees and taxes stay out of cost
+    ///   basis, as in Snowball Analytics (ADR-LEDG-11). Cash −(quantity ×
+    ///   price + fee + tax).
+    /// - Sell: the disposal is valued at quantity × price; cash +(quantity ×
+    ///   price − fee − tax).
     /// - Deposit, tax return: cash +amount. Withdrawal, fee, tax: cash −amount.
     /// - Dividend, interest: net = amount − fee − tax, which must not be
     ///   negative; cash +net.
@@ -682,15 +685,15 @@ impl ValidTransaction {
                     .ok_or_else(|| overflow("quantity"))?;
                 let charges =
                     exact_add(fee.value(), tax.value()).ok_or_else(|| overflow("quantity"))?;
-                let (kind, amount, cash_delta) = if self.kind == TransactionKind::Buy {
-                    let cost = exact_add(gross, charges).ok_or_else(|| overflow("quantity"))?;
-                    (MovementKind::Acquire, cost, -cost)
+                let (kind, cash_delta) = if self.kind == TransactionKind::Buy {
+                    let paid = exact_add(gross, charges).ok_or_else(|| overflow("quantity"))?;
+                    (MovementKind::Acquire, -paid)
                 } else {
-                    let proceeds = exact_sub(gross, charges).ok_or_else(|| overflow("quantity"))?;
-                    (MovementKind::Dispose, proceeds, proceeds)
+                    let received = exact_sub(gross, charges).ok_or_else(|| overflow("quantity"))?;
+                    (MovementKind::Dispose, received)
                 };
                 Effects {
-                    position: vec![position(instrument_id, kind, quantity.value(), amount)],
+                    position: vec![position(instrument_id, kind, quantity.value(), gross)],
                     cash: cash_account_id
                         .map(|id| cash(id, cash_delta))
                         .into_iter()
@@ -938,24 +941,24 @@ mod tests {
     }
 
     #[test]
-    fn buy_cost_includes_fees_and_taxes() {
+    fn buy_cost_excludes_fees_and_taxes_but_cash_pays_them() {
         let effects = trade(TransactionKind::Buy, "100", "35.25", "15.50", "1.09");
 
         let position = effects.position[0];
         assert_eq!(position.kind, MovementKind::Acquire);
         assert_eq!(position.quantity, d("100"));
-        assert_eq!(position.amount, d("3541.59")); // 100 × 35.25 = 3525; + 15.50 + 1.09
-        assert_eq!(effects.cash[0].amount_delta, d("-3541.59"));
+        assert_eq!(position.amount, d("3525")); // 100 × 35.25; no fee or tax
+        assert_eq!(effects.cash[0].amount_delta, d("-3541.59")); // + 15.50 + 1.09
     }
 
     #[test]
-    fn sell_proceeds_are_net_of_fees_and_taxes() {
+    fn sell_is_valued_gross_but_cash_receives_the_net() {
         let effects = trade(TransactionKind::Sell, "40", "50", "12", "0.84");
 
         let position = effects.position[0];
         assert_eq!(position.kind, MovementKind::Dispose);
         assert_eq!(position.quantity, d("40"));
-        assert_eq!(position.amount, d("1987.16"));
+        assert_eq!(position.amount, d("2000"));
         assert_eq!(effects.cash[0].amount_delta, d("1987.16"));
     }
 

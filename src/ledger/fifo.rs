@@ -28,11 +28,11 @@ pub const QUANTITY_SCALE: u32 = super::decimal::MAX_SCALE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
-    /// Opens a lot with the given total cost (purchase price plus fees and
-    /// taxes, or an opening cost basis).
+    /// Opens a lot with the given total cost (quantity × price without fees
+    /// or taxes, ADR-LEDG-11; or an opening cost basis).
     Acquire { quantity: Quantity, cost: Amount },
-    /// Consumes lots; `proceeds` is the net amount received (may be
-    /// negative when fees exceed the gross value).
+    /// Consumes lots; `proceeds` is quantity × price, before fees and taxes
+    /// (ADR-LEDG-11); cash in lieu passes the cash received.
     Dispose {
         quantity: Quantity,
         proceeds: SignedAmount,

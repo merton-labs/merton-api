@@ -45,7 +45,7 @@ separate repository.
 1. **Financial correctness:**
    - exact decimal arithmetic
    - an authoritative transaction ledger
-   - FIFO economic cost basis
+   - FIFO cost basis
    - no fabricated prices or rates
    - explicit partial results
 2. **Reasonable security:**
@@ -233,14 +233,14 @@ Ended sessions are purged a day after they end (ADR-AUTH-11).
 
 ## 9. Financial Ledger Rules
 
-Summary of ADR-LEDG-01 … LEDG-10 and ADR-TXN-01 … TXN-07:
+Summary of ADR-LEDG-01 … LEDG-11 and ADR-TXN-01 … TXN-07:
 
 - **Source of truth:** the ledger. Holdings come from position movements
   and cash balances from cash movements. Neither is stored
   authoritatively.
 - **Atomic writes:** a transaction and its movements are written, edited
   or deleted together, in one database transaction.
-- **Positions:** FIFO economic cost basis, long-only. A holding that goes
+- **Positions:** FIFO cost basis, long-only. A holding that goes
   negative at any historical point is rejected.
 - **Cash:** negative balances are allowed. A portfolio may have several
   cash accounts, including several in the same currency; each account has
@@ -255,8 +255,9 @@ Summary of ADR-LEDG-01 … LEDG-10 and ADR-TXN-01 … TXN-07:
   and validation. Invalid results are rejected. The ledger is not
   append-only.
 - **Fees and taxes:** entered manually, original amounts preserved, in the
-  settlement currency. Included in cost basis and net proceeds. Economic
-  cost basis only; no tax engine.
+  settlement currency. They move cash but stay out of cost basis and
+  disposal value, as in Snowball Analytics (ADR-LEDG-11, owner
+  2026-11-01). No tax engine.
 - **FX exchange:** records executed amounts and rate, kept separate from
   market FX rates. Fees are not included in principal.
 - **Corporate actions:**
@@ -1204,6 +1205,11 @@ after the MVP.
 24. ~~**ADR-VAL-07:** the valuation details.~~ Accepted 2026-10-30, with
     the standing rule to follow Snowball Analytics wherever it documents
     a behaviour (ADR-SCOPE-08).
+25. ~~**ADR-LEDG-10:** fees in cost basis.~~ Answered 2026-11-01: follow
+    Snowball, with fees and taxes out of cost basis (ADR-LEDG-11). Raised
+    after the owner's Snowball portfolio was imported into Merton: cost
+    basis came out $10.03 higher, while quantities and market value
+    matched. Migration `m20261101_000010` rewrites the stored amounts.
 
 ## 23. Current Implementation Status
 
@@ -1226,7 +1232,7 @@ every screen (merton-web PR #5).
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 290 passing | `cargo test --locked` (local) |
+| Tests | ✅ 292 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
