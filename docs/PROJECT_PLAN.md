@@ -34,9 +34,9 @@ separate repository.
 | P1 (authentication) | Completed |
 | P1.1 (auth hardening) | Completed |
 | P2A (portfolios) | Completed (`c5e812d`, CI green; decisions confirmed 2026-10-31) |
-| P2B (instruments, cash accounts) | Completed (`04bb1b9`, CI green; one decision provisional, ADR-INST-02) |
-| P3 (ledger, FIFO) | Completed (`fc538e1`, CI green; decisions confirmed 2026-10-31 except two details, see §22) |
-| P4 (financial transactions, corporate actions) | Completed (PR #1, merge `725023d`, CI green (run 41078791140); two corporate-action rules provisional, see §22) |
+| P2B (instruments, cash accounts) | Completed (`04bb1b9`, CI green; decisions confirmed 2026-10-31 and 2026-11-01) |
+| P3 (ledger, FIFO) | Completed (`fc538e1`, CI green; decisions confirmed 2026-10-31 and 2026-11-01) |
+| P4 (financial transactions, corporate actions) | Completed (PR #1, merge `725023d`, CI green (run 41078791140); decisions confirmed 2026-10-31 and 2026-11-01) |
 | P5 (valuation, FX, allocation) | Completed: storage in PR #1; holdings, valuation and allocation in PR #2, merge `67c3d1d`, CI green (run 41083764335) |
 
 ## 2. Product Goals
@@ -423,9 +423,9 @@ flowchart LR
 | Phase | Hard prerequisites | Decisions needed before starting |
 | --- | --- | --- |
 | P2A ✅ | P1.1 | Done; decisions confirmed 2026-10-31 |
-| P2B ✅ | P2A | Done; confirmed 2026-10-31 except deferring the metadata column (ADR-INST-02) |
-| P3 ✅ | P2B | Done; confirmed 2026-10-31 except the decimal grammar and sign rules (ADR-NUM-04) and rejecting unrepresentable results (ADR-NUM-05) |
-| P4 ✅ | P3 | Done; confirmed 2026-10-31 except ADR-TXN-07 rules 5–6 |
+| P2B ✅ | P2A | Done; confirmed 2026-10-31, and deferring the metadata column (ADR-INST-02) on 2026-11-01 |
+| P3 ✅ | P2B | Done; confirmed 2026-10-31, and the decimal grammar and sign rules (ADR-NUM-04) and rejecting unrepresentable results (ADR-NUM-05) on 2026-11-01 |
+| P4 ✅ | P3 | Done; confirmed 2026-10-31, and ADR-TXN-07 rules 5–6 on 2026-11-01 |
 | P5 ✅ | P3, P4 | Done (ADR-VAL-07 accepted 2026-10-30) |
 | P6 | P3, P4, P5 | ADR-CSV-02 staging model |
 
@@ -587,8 +587,8 @@ P2A onward are *Proposed* until they are implemented.
 - **Objective:** the reference data the ledger needs.
 - **Dependencies:** P2A.
 - **Provisional decisions:** these were implemented with the most
-  conservative option. The owner confirmed the first two on 2026-10-31;
-  the third still needs confirmation:
+  conservative option. The owner confirmed the first two on 2026-10-31
+  and the third on 2026-11-01:
   - ADR-INST-04: bank deposits are plain cash accounts
   - ADR-PORT-04: deleting a portfolio also deletes its unused cash accounts
   - ADR-INST-02: the typed JSON metadata column is deferred until an
@@ -684,8 +684,9 @@ P2A onward are *Proposed* until they are implemented.
 - **Dependencies:** P2B.
 - **Provisional decisions:** the owner decisions due before P3 were still
   open, so each was implemented with the most conservative option. They
-  were marked **Proposed**; the owner confirmed them on 2026-10-31, except the
-  details still listed in §22:
+  were marked **Proposed**; the owner confirmed them on 2026-10-31, and the
+  last details (ADR-NUM-04 grammar and sign rules, ADR-NUM-05 rejection)
+  on 2026-11-01:
   - ADR-LEDG-02: the physical schema below
   - ADR-LEDG-07: each `OPENING_POSITION` opens exactly one lot (several
     lots are several transactions)
@@ -813,8 +814,8 @@ P2A onward are *Proposed* until they are implemented.
   - migration `m20261030_000008_add_exchange_and_corporate_actions`
 - **Provisional decisions:** the schema additions (ADR-LEDG-02) and the
   corporate-action rules chosen under the owner's delegation (ADR-TXN-07,
-  ADR-NUM-05). The owner confirmed them on 2026-10-31, except ADR-TXN-07 rules
-  5–6 (§22, question 13).
+  ADR-NUM-05). The owner confirmed them on 2026-10-31, and ADR-TXN-07 rules
+  5–6 on 2026-11-01 (§22, question 13).
 - **Files:**
   - `src/ledger/decimal.rs`: `Ratio`, exact `div_round`
   - `src/ledger/fifo.rs`: `Split` and `StockDividend` events, proportional
@@ -1121,8 +1122,9 @@ tests, and `unsafe_code` is forbidden.
 These need project-owner decisions. Do not resolve them silently in code;
 the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-decisions-summary).
 
-Questions 1–10 were confirmed by the owner on 2026-10-31, except the parts
-still open below.
+Questions 1–10 were confirmed by the owner on 2026-10-31, and the parts
+left open on 2026-11-01, after comparing with the live Snowball Analytics
+app. Only question 15 is still open.
 
 1. ~~**ADR-ARCH-03:** module organization.~~ Answered: keep the current
    hybrid.
@@ -1131,26 +1133,29 @@ still open below.
 4. ~~**ADR-PORT-04:** unused cash accounts are deleted with their
    portfolio.~~ Confirmed.
 5. ~~**ADR-PORT-05:** format-only base-currency validation.~~ Confirmed.
-6. **ADR-INST-04:** bank deposits are plain cash accounts: confirmed.
-   *Still open:* deferring the instrument metadata column (ADR-INST-02).
-7. **ADR-NUM-04:** the limits (8 decimals, 15 integer digits) are
-   confirmed. *Still open:* the strict grammar and sign rules, and
-   currency minor units (ADR-NUM-02).
+6. ~~**ADR-INST-04 / INST-02:** bank deposits are plain cash accounts, and
+   the instrument metadata column is deferred.~~ Confirmed (2026-10-31 and
+   2026-11-01).
+7. ~~**ADR-NUM-04:** the limits (8 decimals, 15 integer digits), the
+   strict grammar and sign rules, and no currency minor units.~~ Confirmed
+   (2026-10-31 and 2026-11-01). The web form removes `,` thousands
+   separators before sending, as Snowball's form accepts them.
 8. ~~**ADR-LEDG-02/07:** the ledger schema through P4, and one lot per
    `OPENING_POSITION`.~~ Confirmed.
 9. ~~**ADR-LEDG-08:** `sort_order` semantics.~~ Confirmed.
-10. **ADR-NUM-05:** FIFO allocation rounding (half-to-even, 10 places) and
-    the P4 rounding are confirmed. *Still open:* rejecting a result that
-    cannot be represented exactly, instead of rounding it.
+10. ~~**ADR-NUM-05:** FIFO allocation rounding (half-to-even, 10 places),
+    the P4 rounding, and rejecting a result that cannot be represented
+    exactly instead of rounding it.~~ Confirmed (2026-10-31 and
+    2026-11-01).
 11. ~~**ADR-TXN-01:** modelling of Tax Return.~~ Answered 2026-10-30: a
     separate kind.
 12. ~~**ADR-TXN-04:** fee placement.~~ Answered 2026-10-30: follow
     Snowball Analytics, with the fee always in the source currency.
-13. **ADR-TXN-07:** answered 2026-10-30: follow Snowball, else the
-    implementer's choice. Rules 1–4 (`new:old` ratio, proportional lots,
+13. ~~**ADR-TXN-07:** answered 2026-10-30: follow Snowball, else the
+    implementer's choice.~~ Rules 1–4 (`new:old` ratio, proportional lots,
     8-place rounding with the residual in the last lot) were confirmed on
-    2026-10-31. *Still open:* rules 5–6, rejecting a split that rounds a
-    holding or lot to zero, and disposing of cash in lieu through FIFO.
+    2026-10-31, and rules 5–6 (reject a split that rounds a holding or lot
+    to zero; dispose of cash in lieu through FIFO) on 2026-11-01.
 14. ~~**ADR-VAL-02:** price and FX staleness threshold.~~ Answered
     2026-10-30: stale after 7 days for prices and 3 days for FX rates.
 15. **ADR-CSV-02:** import staging model. *Deferred 2026-10-30:* the owner
@@ -1217,8 +1222,8 @@ every screen (merton-web PR #5).
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
-| Ledger, FIFO (P3) | ✅ Done (two details provisional) | migration `m20261024_000006`; `src/ledger/`; `src/http/transactions.rs`; `tests/{ledger,transactions_api,fifo_spec}.rs` |
-| Financial transactions, corporate actions (P4) | ✅ Done (two rules provisional; PR #1) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
+| Ledger, FIFO (P3) | ✅ Done | migration `m20261024_000006`; `src/ledger/`; `src/http/transactions.rs`; `tests/{ledger,transactions_api,fifo_spec}.rs` |
+| Financial transactions, corporate actions (P4) | ✅ Done (PR #1) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
 | Prices, FX rates (P5 step 1) | ✅ Done (PR #1) | migration `m20261030_000009`; `src/market_data/`; `src/http/market_data.rs`; `tests/market_data.rs` |
 | Holdings, valuation, allocation (P5 step 2) | ✅ Done (PR #2) | `src/valuation/`; `src/http/valuation.rs`; `tests/valuation.rs` |
 | CSV (P6) | ❌ Not started | — |
@@ -1234,11 +1239,9 @@ every screen (merton-web PR #5).
    replay measurement (§22, question 16), the decision on account
    recovery (none in the MVP), most confirmations, and deployment (the CI
    `docker` job and the full-stack Docker Compose stack in `merton-web`).
-   Still to do:
-   - **Confirmations still open** (§22): ADR-INST-02 (question 6),
-     ADR-NUM-04 grammar and sign rules (question 7), ADR-NUM-05 rejecting
-     unrepresentable results (question 10), ADR-TXN-07 rules 5–6
-     (question 13).
+   Done on 2026-11-01: the remaining confirmations (ADR-INST-02, NUM-04,
+   NUM-05, TXN-07 rules 5–6), checked against the live Snowball Analytics
+   app.
 2. **P6 — CSV Import & Export**, later. It still needs ADR-CSV-02, the
    staging model (§22, question 15).
 
