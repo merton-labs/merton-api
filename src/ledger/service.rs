@@ -482,7 +482,9 @@ fn to_model(
             model.amount = text(cost_basis);
         }
         Details::OpeningCash { amount, .. } => model.amount = text(amount),
-        Details::CashFlow { amount, .. } => model.amount = text(amount),
+        Details::CashFlow { amount, .. } | Details::Expense { amount, .. } => {
+            model.amount = text(amount)
+        }
         Details::CashTransfer { amount, fee, .. } => {
             model.amount = text(amount);
             model.fee = text(fee);
@@ -520,9 +522,14 @@ fn to_model(
             }
         }
         Details::Income {
-            gross, fee, tax, ..
+            gross,
+            per_share,
+            fee,
+            tax,
+            ..
         } => {
             model.amount = text(gross);
+            model.price = per_share.as_ref().and_then(|p| text(p));
             model.fee = text(fee);
             model.tax = text(tax);
         }

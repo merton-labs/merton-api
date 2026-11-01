@@ -32,12 +32,14 @@ pub enum TransactionKind {
     Dividend,
     /// Interest earned on a cash account.
     Interest,
-    /// A standalone charge on a cash account.
+    /// A standalone charge, such as a broker's monthly fee.
     Fee,
-    /// A standalone tax payment from a cash account.
+    /// A standalone tax payment.
     Tax,
-    /// A refund of tax into a cash account.
+    /// A refund of tax.
     TaxReturn,
+    /// Any other cost of holding an instrument (Snowball's "Other expense").
+    OtherExpense,
     /// Money moved between two cash accounts in the same currency.
     CashTransfer,
     /// One currency bought with another, between two cash accounts.
@@ -62,6 +64,7 @@ impl TransactionKind {
             Self::Fee => "FEE",
             Self::Tax => "TAX",
             Self::TaxReturn => "TAX_RETURN",
+            Self::OtherExpense => "OTHER_EXPENSE",
             Self::CashTransfer => "CASH_TRANSFER",
             Self::FxExchange => "FX_EXCHANGE",
             Self::StockSplit => "STOCK_SPLIT",
@@ -82,6 +85,7 @@ impl TransactionKind {
             "FEE" => Ok(Self::Fee),
             "TAX" => Ok(Self::Tax),
             "TAX_RETURN" => Ok(Self::TaxReturn),
+            "OTHER_EXPENSE" => Ok(Self::OtherExpense),
             "CASH_TRANSFER" => Ok(Self::CashTransfer),
             "FX_EXCHANGE" => Ok(Self::FxExchange),
             "STOCK_SPLIT" => Ok(Self::StockSplit),
@@ -95,12 +99,10 @@ impl TransactionKind {
     fn accepts(self) -> &'static [&'static str] {
         match self {
             Self::OpeningPosition => &["instrument_id", "quantity", "amount"],
-            Self::OpeningCash
-            | Self::Deposit
-            | Self::Withdrawal
-            | Self::Fee
-            | Self::Tax
-            | Self::TaxReturn => &["cash_account_id", "amount"],
+            Self::OpeningCash | Self::Deposit | Self::Withdrawal => &["cash_account_id", "amount"],
+            Self::Fee | Self::Tax | Self::TaxReturn | Self::OtherExpense => {
+                &["instrument_id", "cash_account_id", "amount"]
+            }
             Self::Buy | Self::Sell => &[
                 "instrument_id",
                 "cash_account_id",
@@ -109,7 +111,14 @@ impl TransactionKind {
                 "fee",
                 "tax",
             ],
-            Self::Dividend => &["instrument_id", "cash_account_id", "amount", "fee", "tax"],
+            Self::Dividend => &[
+                "instrument_id",
+                "cash_account_id",
+                "amount",
+                "price",
+                "fee",
+                "tax",
+            ],
             Self::Interest => &["cash_account_id", "amount", "fee", "tax"],
             Self::CashTransfer => &[
                 "cash_account_id",
@@ -181,18 +190,31 @@ pub enum Details {
         fee: Amount,
         tax: Amount,
     },
-    /// A deposit, withdrawal, fee, tax or tax return: one positive amount on
-    /// one account. The kind gives the direction.
+    /// A deposit or withdrawal: one positive amount on one account. The kind
+    /// gives the direction.
     CashFlow {
         cash_account_id: Uuid,
         amount: Amount,
     },
+    /// A fee, tax, tax return or other expense, as in Snowball Analytics:
+    /// optionally about one instrument (required for an other expense), and
+    /// moving cash only when a cash account is given. One of the two must be
+    /// given, as it gives the amount's currency. A tax return adds cash; the
+    /// others take it.
+    Expense {
+        instrument_id: Option<Uuid>,
+        cash_account_id: Option<Uuid>,
+        amount: Amount,
+    },
     /// A dividend (from an instrument) or interest (on a cash account):
     /// the gross amount, less any fee and tax withheld (ADR-TXN-05).
+    /// A dividend may also record its payout per share, as Snowball
+    /// Analytics does; it is informational and moves nothing.
     Income {
         instrument_id: Option<Uuid>,
         cash_account_id: Option<Uuid>,
         gross: Amount,
+        per_share: Option<Price>,
         fee: Amount,
         tax: Amount,
     },
@@ -404,16 +426,37 @@ pub fn validate(
                 _ => None,
             }
         }
-        TransactionKind::Deposit
-        | TransactionKind::Withdrawal
-        | TransactionKind::Fee
-        | TransactionKind::Tax
-        | TransactionKind::TaxReturn => {
+        TransactionKind::Deposit | TransactionKind::Withdrawal => {
             let cash_account_id = v.require("cash_account_id", raw.cash_account_id, kind);
             let amount = v.parse("amount", raw.amount, kind, positive_amount);
             match (cash_account_id, amount) {
                 (Some(cash_account_id), Some(amount)) => Some(Details::CashFlow {
                     cash_account_id,
+                    amount,
+                }),
+                _ => None,
+            }
+        }
+        TransactionKind::Fee
+        | TransactionKind::Tax
+        | TransactionKind::TaxReturn
+        | TransactionKind::OtherExpense => {
+            let links = if kind == TransactionKind::OtherExpense {
+                v.require("instrument_id", raw.instrument_id, kind)
+                    .map(|_| ())
+            } else if raw.instrument_id.is_none() && raw.cash_account_id.is_none() {
+                v.field::<()>(
+                    "cash_account_id",
+                    Err("is required unless instrument_id is given".to_owned()),
+                )
+            } else {
+                Some(())
+            };
+            let amount = v.parse("amount", raw.amount, kind, positive_amount);
+            match (links, amount) {
+                (Some(()), Some(amount)) => Some(Details::Expense {
+                    instrument_id: raw.instrument_id,
+                    cash_account_id: raw.cash_account_id,
                     amount,
                 }),
                 _ => None,
@@ -435,18 +478,31 @@ pub fn validate(
                 Some(raw.cash_account_id)
             };
             let gross = v.parse("amount", raw.amount, kind, positive_amount);
+            // Interest rejects `price` through `accepts`.
+            let per_share = match raw.price {
+                Some(text) if kind == TransactionKind::Dividend => {
+                    v.field("price", Price::parse(text)).map(Some)
+                }
+                _ => Some(None),
+            };
             let fee = v.optional("fee", raw.fee);
             let tax = v.optional("tax", raw.tax);
-            match (instrument_id, cash_account_id, gross, fee, tax) {
-                (Some(instrument_id), Some(cash_account_id), Some(gross), Some(fee), Some(tax)) => {
-                    Some(Details::Income {
-                        instrument_id,
-                        cash_account_id,
-                        gross,
-                        fee,
-                        tax,
-                    })
-                }
+            match (instrument_id, cash_account_id, gross, per_share, fee, tax) {
+                (
+                    Some(instrument_id),
+                    Some(cash_account_id),
+                    Some(gross),
+                    Some(per_share),
+                    Some(fee),
+                    Some(tax),
+                ) => Some(Details::Income {
+                    instrument_id,
+                    cash_account_id,
+                    gross,
+                    per_share,
+                    fee,
+                    tax,
+                }),
                 _ => None,
             }
         }
@@ -572,7 +628,9 @@ impl ValidTransaction {
             | Details::Trade { instrument_id, .. }
             | Details::StockSplit { instrument_id, .. }
             | Details::StockDividend { instrument_id, .. } => Some(instrument_id),
-            Details::Income { instrument_id, .. } => instrument_id,
+            Details::Income { instrument_id, .. } | Details::Expense { instrument_id, .. } => {
+                instrument_id
+            }
             Details::OpeningCash { .. }
             | Details::CashFlow { .. }
             | Details::CashTransfer { .. }
@@ -598,6 +656,9 @@ impl ValidTransaction {
                 cash_account_id, ..
             }
             | Details::Income {
+                cash_account_id, ..
+            }
+            | Details::Expense {
                 cash_account_id, ..
             } => cash_account_id,
             Details::StockSplit { cash_in_lieu, .. }
@@ -704,11 +765,7 @@ impl ValidTransaction {
                 cash_account_id,
                 amount,
             } => {
-                let credit = matches!(
-                    self.kind,
-                    TransactionKind::Deposit | TransactionKind::TaxReturn
-                );
-                let delta = if credit {
+                let delta = if self.kind == TransactionKind::Deposit {
                     amount.value()
                 } else {
                     -amount.value()
@@ -716,6 +773,24 @@ impl ValidTransaction {
                 Effects {
                     position: Vec::new(),
                     cash: vec![cash(cash_account_id, delta)],
+                }
+            }
+            Details::Expense {
+                cash_account_id,
+                amount,
+                ..
+            } => {
+                let delta = if self.kind == TransactionKind::TaxReturn {
+                    amount.value()
+                } else {
+                    -amount.value()
+                };
+                Effects {
+                    position: Vec::new(),
+                    cash: cash_account_id
+                        .map(|id| cash(id, delta))
+                        .into_iter()
+                        .collect(),
                 }
             }
             Details::Income {
@@ -1147,6 +1222,85 @@ mod tests {
             .effects()
             .unwrap();
         assert_eq!(effects.cash[0].amount_delta, d("2.70"));
+    }
+
+    #[test]
+    fn expenses_follow_snowball_links_and_optional_cash() {
+        let raw = |instrument: Option<Uuid>, account: Option<Uuid>| RawTransaction {
+            trade_date: "2026-05-01",
+            instrument_id: instrument,
+            cash_account_id: account,
+            amount: Some("12.50"),
+            ..Default::default()
+        };
+        let effects = |kind, r: &RawTransaction<'_>| validate(kind, r).unwrap().effects().unwrap();
+
+        // About an instrument, without touching cash.
+        let fee = effects(TransactionKind::Fee, &raw(Some(Uuid::nil()), None));
+        assert!(fee.cash.is_empty() && fee.position.is_empty());
+
+        // With a cash account: a tax return adds, the others take.
+        let account = raw(None, Some(Uuid::max()));
+        assert_eq!(
+            effects(TransactionKind::TaxReturn, &account).cash[0].amount_delta,
+            d("12.50")
+        );
+        assert_eq!(
+            effects(TransactionKind::Tax, &account).cash[0].amount_delta,
+            d("-12.50")
+        );
+        let other = effects(
+            TransactionKind::OtherExpense,
+            &raw(Some(Uuid::nil()), Some(Uuid::max())),
+        );
+        assert_eq!(other.cash[0].amount_delta, d("-12.50"));
+
+        // Neither link gives no currency; an other expense needs its instrument.
+        let errors = validate(TransactionKind::Fee, &raw(None, None)).unwrap_err();
+        assert_eq!(fields(&errors), ["cash_account_id"]);
+        let errors = validate(TransactionKind::OtherExpense, &account).unwrap_err();
+        assert_eq!(fields(&errors), ["instrument_id"]);
+    }
+
+    #[test]
+    fn a_dividend_may_record_its_payout_per_share_without_moving_more_cash() {
+        // As in Snowball Analytics: total received is required, per share
+        // is optional and informational (0 when unknown).
+        let raw = RawTransaction {
+            trade_date: "2026-04-20",
+            instrument_id: Some(Uuid::nil()),
+            cash_account_id: Some(Uuid::max()),
+            amount: Some("10"),
+            price: Some("0.25"),
+            tax: Some("1.5"),
+            ..Default::default()
+        };
+        let valid = validate(TransactionKind::Dividend, &raw).unwrap();
+        assert!(matches!(
+            valid.details,
+            Details::Income { per_share: Some(p), .. } if p.value() == d("0.25")
+        ));
+        assert_eq!(valid.effects().unwrap().cash[0].amount_delta, d("8.5"));
+
+        let zero = RawTransaction {
+            price: Some("0"),
+            ..raw.clone()
+        };
+        assert!(validate(TransactionKind::Dividend, &zero).is_ok());
+
+        let negative = RawTransaction {
+            price: Some("-0.25"),
+            ..raw.clone()
+        };
+        let errors = validate(TransactionKind::Dividend, &negative).unwrap_err();
+        assert_eq!(fields(&errors), ["price"]);
+
+        let interest = RawTransaction {
+            instrument_id: None,
+            ..raw
+        };
+        let errors = validate(TransactionKind::Interest, &interest).unwrap_err();
+        assert_eq!(fields(&errors), ["price"]);
     }
 
     #[test]

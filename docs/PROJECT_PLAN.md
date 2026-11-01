@@ -1232,7 +1232,7 @@ every screen (merton-web PR #5).
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 292 passing | `cargo test --locked` (local) |
+| Tests | ✅ 296 passing | `cargo test --locked` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |

@@ -149,12 +149,17 @@ prices cannot be deleted (`409 instrument_in_use`).
     `fee`, `tax` and `cash_account_id`. The cash account must use the
     instrument's quote currency. Fees and taxes move cash but stay out of
     cost basis, as in Snowball Analytics.
-  - `DEPOSIT`, `WITHDRAWAL`, `FEE`, `TAX` and `TAX_RETURN`:
-    `cash_account_id` and a positive `amount`. A deposit or tax return adds
-    to the account; the others take from it.
+  - `DEPOSIT` and `WITHDRAWAL`: `cash_account_id` and a positive `amount`.
+    A deposit adds to the account; a withdrawal takes from it.
+  - `FEE`, `TAX`, `TAX_RETURN` and `OTHER_EXPENSE`: a positive `amount`,
+    with `instrument_id` and/or `cash_account_id` (at least one;
+    `OTHER_EXPENSE` always needs `instrument_id`). Cash moves only with
+    `cash_account_id`: a tax return adds to it, the others take from it.
+    Expenses never change cost basis.
   - `DIVIDEND`: `instrument_id` and the gross `amount`, with optional `fee`
     and `tax` withheld and an optional `cash_account_id` (in the
     instrument's quote currency), which is credited with the net amount.
+    An optional `price` records the payout per share, for reference only.
   - `INTEREST`: `cash_account_id` and the gross `amount`, with optional
     `fee` and `tax`; the account is credited with the net amount.
   - For `DIVIDEND` and `INTEREST`, `fee` + `tax` may not exceed `amount`.

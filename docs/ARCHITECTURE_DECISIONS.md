@@ -996,7 +996,8 @@ Every decision uses the same fields:
 - **Kinds as implemented (P4):**
   - `OPENING_POSITION`, `OPENING_CASH`, `BUY`, `SELL`
   - `DEPOSIT`, `WITHDRAWAL`, `DIVIDEND`, `INTEREST`
-  - `FEE`, `TAX`, `TAX_RETURN`
+  - `FEE`, `TAX`, `TAX_RETURN`, and `OTHER_EXPENSE` (added 2026-11-01,
+    ADR-TXN-09)
   - `CASH_TRANSFER`, `FX_EXCHANGE`
   - `STOCK_SPLIT`, `STOCK_DIVIDEND`
   - Stock Split and Reverse Split share `STOCK_SPLIT`. Its ratio says
@@ -1010,7 +1011,8 @@ Every decision uses the same fields:
   - Applicable transactions have combined fee and tax fields.
   - For trades, they are denominated in the settlement currency.
   - They are included in economic cost basis (buys) and in net proceeds
-    (sells).
+    (sells). *Superseded by ADR-LEDG-11 (2026-11-01):* they now move cash
+    only and stay out of cost basis, as in Snowball.
 
 ### ADR-TXN-03 — Cash transfer is distinct from FX exchange
 - **Status:** Accepted · **Source:** Owner · **Phases:** P4
@@ -1080,6 +1082,20 @@ Every decision uses the same fields:
   - **No holding check:** a dividend is not checked against the holding
     on its date. A payment can arrive after the shares were sold, and the
     MVP has no ex-date or pay date (ADR-LEDG-08).
+- **Payout per share (owner's direction to follow Snowball, 2026-11-01):**
+  a `DIVIDEND` may record its payout per share in `price` (≥ 0, at most 8
+  places). It is for reference only. It moves nothing, and it is not
+  checked against `amount`.
+  - **Snowball (observed 2026-11-01):** its income form has a required
+    "Total received" (before tax) and an optional "per share" ("put 0 if
+    you don't know"). Neither fills in the other. Its income list shows
+    both.
+  - **Not copied yet:** Snowball also fills in the tax from a portfolio
+    setting (`dividendTaxPercent`, 15% on the owner's portfolio, with a
+    per-holding override) until the user edits it. That needs a new
+    portfolio setting and a rounding rule, because a percentage of an
+    8-place amount can need more than 8 places. It is left for the
+    owner to decide.
 
 ### ADR-TXN-06 — Corporate actions
 - **Status:** Accepted · **Source:** Owner · **Phases:** P4
@@ -1153,7 +1169,7 @@ Every decision uses the same fields:
   re-applies later splits.
 
 ### ADR-TXN-08 — Standalone cash transactions (P4)
-- **Status:** Accepted · **Source:** Owner (2026-10-30), Implementation (P4) · **Phases:** P4
+- **Status:** Accepted for `DEPOSIT` and `WITHDRAWAL`; superseded for `FEE`, `TAX` and `TAX_RETURN` by ADR-TXN-09 (owner, 2026-11-01) · **Source:** Owner (2026-10-30), Implementation (P4) · **Phases:** P4
 - **Decision:**
   - **Fields:** `DEPOSIT`, `WITHDRAWAL`, `FEE`, `TAX` and `TAX_RETURN`
     each take `cash_account_id` and a positive `amount`.
@@ -1164,6 +1180,35 @@ Every decision uses the same fields:
     are entered on the trade (ADR-TXN-02).
   - **No fee fields:** deposits and withdrawals have none; a bank charge
     is a separate `FEE`.
+
+### ADR-TXN-09 — Expenses as in Snowball Analytics
+- **Status:** Accepted · **Source:** Owner (2026-11-01: "the same as
+  Snowball") · **Phases:** P4
+- **Decision:** the Expenses kinds follow Snowball's expense form.
+  - **Kinds:** `FEE`, `TAX`, `TAX_RETURN`, and the new `OTHER_EXPENSE`.
+  - **Instrument:** a fee, tax or tax return may name an `instrument_id`;
+    an other expense must name one.
+  - **Cash:** `cash_account_id` is optional, like "Update cash balance".
+    Without it nothing moves; with it a tax return posts +amount and the
+    others −amount. A cash account used with an instrument must be in the
+    instrument's quote currency.
+  - **Currency:** at least one of `instrument_id` and `cash_account_id`
+    is required (`422` on `cash_account_id`), because one of them gives
+    the amount's currency.
+  - **Cost basis:** an expense never changes a cost basis, even when it
+    names an instrument (ADR-LEDG-11).
+- **Snowball (observed 2026-11-01):** the operations are Fee, Tax, Tax
+  return and Other expense.
+  - The ticker is "(optional)" for the first three and required for Other
+    expense.
+  - The amount field is labelled Fee, Tax, Tax or Amount.
+  - "Update cash balance" starts unticked, and "Current cash balance" is
+    shown below it.
+  - The Fee tooltip says: "Fixed fee of your broker (e.g. monthly)".
+- **Difference kept:** Snowball also lets an expense with neither a ticker
+  nor a cash update pick any currency. Merton has no currency field on a
+  transaction, so it requires a link instead. Adding a currency column
+  would remove this difference; that is left for the owner to decide.
 
 ---
 
