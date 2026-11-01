@@ -1225,7 +1225,7 @@ every screen (merton-web PR #5).
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Session purge | ✅ Done (PR #3, merge `a2bcbb9`, run 41106885927) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
 | Account recovery | ➖ Not in the MVP | ADR-AUTH-10 (owner, 2026-10-31) |
-| Deployment & CI Docker smoke | ✅ Done (PR #4, merge `b3ea53b`, run 41176020573) | `.github/workflows/ci.yml` (`docker` job); full-stack Compose + `merton-web/scripts/smoke.sh` (passed locally 2026-10-31) |
+| Deployment & CI Docker smoke | ✅ Done (PR #4, merge `b3ea53b`, run 41176020573) | `.github/workflows/ci.yml` (`docker` job); full-stack Compose + `merton-web/scripts/smoke.sh` (passed locally 2026-10-31; passed again 2026-11-01 under Podman on Windows (WSL), with data kept across an `api` restart) |
 
 ## 24. Next Recommended Task
 
