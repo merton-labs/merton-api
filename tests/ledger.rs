@@ -822,6 +822,90 @@ async fn cash_transactions_post_exact_signed_movements() {
 }
 
 #[tokio::test]
+async fn expenses_may_name_an_instrument_and_skip_cash() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+
+    let other = app
+        .record(
+            &alice,
+            &book,
+            json!({
+                "kind": "OTHER_EXPENSE", "trade_date": "2026-05-01",
+                "instrument_id": book.instrument, "cash_account_id": book.cash, "amount": "3.25",
+            }),
+        )
+        .await;
+    assert_eq!(other.status, StatusCode::CREATED, "{}", other.body);
+    assert_eq!(other.body["kind"], "OTHER_EXPENSE");
+    assert_eq!(app.cash_rows(&id_of(&other)).await[0].amount_delta, "-3.25");
+
+    let cashless = app
+        .record(
+            &alice,
+            &book,
+            json!({
+                "kind": "FEE", "trade_date": "2026-05-02",
+                "instrument_id": book.instrument, "amount": "1",
+            }),
+        )
+        .await;
+    assert_eq!(cashless.status, StatusCode::CREATED, "{}", cashless.body);
+    assert!(app.cash_rows(&id_of(&cashless)).await.is_empty());
+
+    let unlinked = app
+        .record(
+            &alice,
+            &book,
+            json!({ "kind": "TAX", "trade_date": "2026-05-03", "amount": "1" }),
+        )
+        .await;
+    assert_eq!(
+        unlinked.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        unlinked.body
+    );
+    assert_eq!(app.balance(&book.cash).await, d("-3.25"));
+}
+
+#[tokio::test]
+async fn a_dividend_keeps_its_payout_per_share() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let book = app.book(&alice).await;
+
+    let response = app
+        .record(
+            &alice,
+            &book,
+            json!({
+                "kind": "DIVIDEND", "trade_date": "2026-04-20", "instrument_id": book.instrument,
+                "cash_account_id": book.cash, "amount": "10", "price": "0.25", "tax": "1.5",
+            }),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+    assert_eq!(response.body["price"], "0.25");
+    let id = id_of(&response);
+    assert_eq!(app.cash_rows(&id).await[0].amount_delta, "8.5");
+
+    let without = app
+        .record(
+            &alice,
+            &book,
+            json!({
+                "kind": "DIVIDEND", "trade_date": "2026-04-21",
+                "instrument_id": book.instrument, "amount": "10",
+            }),
+        )
+        .await;
+    assert_eq!(without.status, StatusCode::CREATED, "{}", without.body);
+    assert_eq!(without.body["price"], Value::Null);
+}
+
+#[tokio::test]
 async fn income_is_rejected_when_fee_and_tax_exceed_the_gross_amount() {
     let app = TestApp::new().await;
     let alice = user(&app, "alice@example.com").await;

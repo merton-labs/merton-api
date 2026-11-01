@@ -1103,6 +1103,7 @@ async fn openapi_documents_all_transaction_operations_security_and_csrf() {
             "FEE",
             "TAX",
             "TAX_RETURN",
+            "OTHER_EXPENSE",
             "CASH_TRANSFER",
             "FX_EXCHANGE",
             "STOCK_SPLIT",

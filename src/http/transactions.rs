@@ -32,6 +32,7 @@ pub enum TransactionKindDto {
     Fee,
     Tax,
     TaxReturn,
+    OtherExpense,
     CashTransfer,
     FxExchange,
     StockSplit,
@@ -52,6 +53,7 @@ impl From<TransactionKindDto> for TransactionKind {
             TransactionKindDto::Fee => Self::Fee,
             TransactionKindDto::Tax => Self::Tax,
             TransactionKindDto::TaxReturn => Self::TaxReturn,
+            TransactionKindDto::OtherExpense => Self::OtherExpense,
             TransactionKindDto::CashTransfer => Self::CashTransfer,
             TransactionKindDto::FxExchange => Self::FxExchange,
             TransactionKindDto::StockSplit => Self::StockSplit,
@@ -74,6 +76,7 @@ impl From<TransactionKind> for TransactionKindDto {
             TransactionKind::Fee => Self::Fee,
             TransactionKind::Tax => Self::Tax,
             TransactionKind::TaxReturn => Self::TaxReturn,
+            TransactionKind::OtherExpense => Self::OtherExpense,
             TransactionKind::CashTransfer => Self::CashTransfer,
             TransactionKind::FxExchange => Self::FxExchange,
             TransactionKind::StockSplit => Self::StockSplit,
@@ -89,10 +92,15 @@ impl From<TransactionKind> for TransactionKindDto {
 /// - `BUY` / `SELL`: `instrument_id`, `quantity`, `price`; optional `fee`, `tax`
 ///   (default 0) and `cash_account_id` (must use the instrument's quote currency).
 ///   Fees and taxes move cash but stay out of cost basis.
-/// - `DEPOSIT` / `WITHDRAWAL` / `FEE` / `TAX` / `TAX_RETURN`: `cash_account_id`,
-///   `amount` (> 0). A deposit or tax return adds to the account; the others
-///   take from it.
-/// - `DIVIDEND`: `instrument_id`, `amount` (gross, > 0); optional `fee`, `tax`
+/// - `DEPOSIT` / `WITHDRAWAL`: `cash_account_id`, `amount` (> 0). A deposit adds
+///   to the account; a withdrawal takes from it.
+/// - `FEE` / `TAX` / `TAX_RETURN` / `OTHER_EXPENSE`: `amount` (> 0), with
+///   `instrument_id` and/or `cash_account_id` (at least one, as they give the
+///   currency; `OTHER_EXPENSE` always needs `instrument_id`). Cash moves only
+///   when `cash_account_id` is given, which must then use the instrument's quote
+///   currency: a tax return adds to it, the others take from it.
+/// - `DIVIDEND`: `instrument_id`, `amount` (gross, > 0); optional `price` (the
+///   payout per share, ≥ 0, recorded for reference only), `fee`, `tax`
 ///   (withheld, default 0) and `cash_account_id` (credited with the net amount;
 ///   must use the instrument's quote currency).
 /// - `INTEREST`: `cash_account_id`, `amount` (gross, > 0); optional `fee`, `tax`.
