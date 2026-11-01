@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::auth::UserId;
 use crate::infrastructure::entities::{cash_movement, position_movement, transaction};
+use crate::ledger::transaction::TransactionKind;
 use crate::portfolios::repository::owned_portfolio;
 
 fn in_owned_portfolio(
@@ -228,6 +229,30 @@ pub async fn positions_until(
         .order_by_asc(position_movement::Column::Id)
         .all(db)
         .await
+}
+
+/// The dividend and interest transactions of an owned portfolio dated
+/// between `from` and `to` (inclusive; either may be open), in ledger
+/// order.
+pub async fn income_between(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    portfolio_id: Uuid,
+    from: Option<Date>,
+    to: Option<Date>,
+) -> Result<Vec<transaction::Model>, DbErr> {
+    let mut query =
+        in_owned_portfolio(owner, portfolio_id, None).filter(transaction::Column::Kind.is_in([
+            TransactionKind::Dividend.as_str(),
+            TransactionKind::Interest.as_str(),
+        ]));
+    if let Some(from) = from {
+        query = query.filter(transaction::Column::TradeDate.gte(from));
+    }
+    if let Some(to) = to {
+        query = query.filter(transaction::Column::TradeDate.lte(to));
+    }
+    in_ledger_order(query).all(db).await
 }
 
 /// Every cash movement of an owned portfolio dated on or before `as_of`.

@@ -316,6 +316,24 @@ pub async fn latest_price(
         .await
 }
 
+/// Every `base`/`quote` rate of the owner on or before `until`, oldest
+/// first.
+pub async fn fx_rates_until(
+    db: &impl ConnectionTrait,
+    owner: UserId,
+    base_currency: &str,
+    quote_currency: &str,
+    until: Date,
+) -> Result<Vec<fx_rate::Model>, DbErr> {
+    rates_of(owner)
+        .filter(rate::Column::BaseCurrency.eq(base_currency))
+        .filter(rate::Column::QuoteCurrency.eq(quote_currency))
+        .filter(rate::Column::RateDate.lte(until))
+        .order_by_asc(rate::Column::RateDate)
+        .all(db)
+        .await
+}
+
 /// The owner's latest `base`/`quote` rate on or before `as_of`.
 pub async fn latest_fx_rate(
     db: &impl ConnectionTrait,

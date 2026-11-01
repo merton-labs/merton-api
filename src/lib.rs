@@ -4,6 +4,7 @@ pub mod app;
 pub mod auth;
 pub mod cash_accounts;
 pub mod config;
+pub mod dividends;
 pub mod http;
 pub mod infrastructure;
 pub mod instruments;
