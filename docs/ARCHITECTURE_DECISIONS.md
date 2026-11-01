@@ -692,11 +692,11 @@ Every decision uses the same fields:
 - **Decision:** Common attributes are relational columns. Attributes
   specific to an asset class go in a typed JSON metadata column, validated
   through Rust types.
-- **P2B: metadata column deferred (Proposed).** No asset-specific attribute
-  has been specified, and an empty column would be a speculative
-  abstraction (ADR-ARCH-04). The column, with its Rust types, is added by a
-  portable `ADD COLUMN` migration once the first attribute is defined.
-  Awaiting owner confirmation.
+- **Metadata column deferred: Accepted (owner, 2026-11-01).** No
+  asset-specific attribute has been specified, and an empty column would be
+  a speculative abstraction (ADR-ARCH-04). The column, with its Rust types,
+  is added by a portable `ADD COLUMN` migration once the first attribute is
+  defined.
 
 ### ADR-INST-03 — Fixed quote currency
 - **Status:** Accepted · **Source:** Owner · **Phases:** P2B
@@ -1047,15 +1047,25 @@ Every decision uses the same fields:
     that holding.
 
 ### ADR-TXN-07 — Corporate action allocation and rounding details
-- **Status:** Accepted (approach; rules 1–4, owner 2026-10-31) / **Proposed** (rules 5–6) · **Source:** Owner (2026-10-30: "follow Snowball Analytics; where it has no rule, choose what is appropriate"), Implementation (P4) · **Phases:** P4
+- **Status:** Accepted (approach and rules 1–4, owner 2026-10-31; rules 5–6, owner 2026-11-01) · **Source:** Owner (2026-10-30: "follow Snowball Analytics; where it has no rule, choose what is appropriate"), Implementation (P4) · **Phases:** P4
 - **What Snowball Analytics specifies:**
   - A split takes a coefficient: 4 for a four-for-one split, 0.5 for a
     two-to-one reverse split.
   - A stock dividend takes the number of shares received.
   - It documents no lot-level allocation, rounding or cash-in-lieu rules.
+- **What Snowball Analytics does (observed in the live app, 2026-11-01):**
+  - It accepts any coefficient, however small. A coefficient of 0.0000001
+    left the older lots at a few billionths of a share with their full
+    cost (shown as a −100% gain). This works only because it keeps
+    unrounded binary floating point, which ADR-NUM-01 rules out; with
+    8-place rounding the lot would hold zero shares and still carry
+    cost, so rule 5 rejects that split instead.
+  - It has no cash-in-lieu step. Fractional shares stay, and the user
+    records the cash as a Sell, which goes through FIFO. Rule 6 gives the
+    same result in one step.
 - **Rules chosen in P4:** the owner could not judge them on 2026-10-30,
-  then accepted rules 1–4 on 2026-10-31. Rules 5 and 6 are still Proposed.
-  Before relying on cash-in-lieu profit or loss, check rule 6 against a
+  then accepted rules 1–4 on 2026-10-31 and rules 5–6 on 2026-11-01, after
+  the comparison above. Before relying on cash-in-lieu profit or loss, check rule 6 against a
   broker statement or a tax adviser.
   1. **Ratio:** a split is entered as `new:old` rather than a single
      coefficient. Ratios such as 1:3 have no exact decimal coefficient.
@@ -1138,7 +1148,7 @@ Every decision uses the same fields:
   so they cannot be mixed up.
 
 ### ADR-NUM-04 — Precision limits
-- **Status:** Accepted (limits, owner 2026-10-31) / **Proposed** (the other rules) · **Phases:** P3
+- **Status:** Accepted (limits, owner 2026-10-31; the other rules, owner 2026-11-01) · **Phases:** P3
 - **Decision:**
   - **Limits (Accepted):** every input decimal has at most 8 digits after the point
     and at most 15 significant digits before it.
@@ -1149,11 +1159,19 @@ Every decision uses the same fields:
   - **Derived values:** these may have more decimals. For example
     quantity × price can reach 16, and they are stored exactly.
   - **Minor units:** not enforced per currency.
-- The sign rules, grammar and derived-value rules await owner
-  confirmation.
+- **Compared with Snowball Analytics (live app, 2026-11-01):**
+  - **Same:** a zero quantity is rejected; a zero price is accepted;
+    negative amounts cannot be entered; numbers travel as JSON strings;
+    no per-currency minor units (a 0.123456789 USD fee is accepted).
+  - **Thousands separators:** Snowball's form accepts `1,000.5` as
+    1000.5. The API stays strict; the web form removes `,` separators
+    before sending.
+  - **More than 8 decimals:** Snowball stores them (quantity
+    `0.0000000001`, price `10.123456789`) in binary floating point. The
+    8-place input limit accepted on 2026-10-31 stays.
 
 ### ADR-NUM-05 — Rounding policy
-- **Status:** Accepted (principle; P3, P4 and P5 rounding) / **Proposed** (rejecting unrepresentable results) · **Source:** Owner · **Phases:** P3–P5
+- **Status:** Accepted (principle; P3, P4 and P5 rounding; rejecting unrepresentable results, owner 2026-11-01) · **Source:** Owner · **Phases:** P3–P5
 - **Decision:** Input precision is preserved. Intermediate results are
   never rounded arbitrarily. Rounding happens only at defined boundaries,
   such as display, settlement amounts and allocation residuals, and every
@@ -1184,7 +1202,7 @@ Every decision uses the same fields:
     plus open cost always equals acquired cost.
   - **Verification:** checked by an independent AGY spec suite with
     hand-derived values, and by mutation testing.
-  - **Exact arithmetic everywhere else (Proposed):** `rust_decimal`
+  - **Exact arithmetic everywhere else (Accepted · Source: Owner, 2026-11-01):** `rust_decimal`
     silently rounds a result that needs more than 28 significant digits.
     So trade amounts (quantity × price ± fee ± tax) and every FIFO running
     total (open quantity, open cost, lot remainders, cost basis, realized
@@ -1192,7 +1210,9 @@ Every decision uses the same fields:
     cannot be represented, the write is rejected with
     `422 validation_failed` instead of being rounded. The deliberate
     10-place allocation rounding above is the only rounding in P3.
-  - Rejecting instead of rounding awaits owner confirmation.
+  - Snowball Analytics rounds silently in binary floating point, which
+    ADR-NUM-01 rules out, so it offers no rule to copy here. The owner
+    accepted rejecting instead of rounding on 2026-11-01.
 
 ---
 
@@ -1423,13 +1443,12 @@ Every decision uses the same fields:
 
 | ID | Topic | Blocks |
 | --- | --- | --- |
-| ADR-INST-02 | Confirm deferring the instrument metadata column (implemented provisionally) | Confirmation only |
-| ADR-NUM-04 | Confirm the decimal grammar and sign rules (implemented provisionally; the limits were accepted 2026-10-31) | Confirmation only |
-| ADR-NUM-05 | Confirm rejecting a result that cannot be represented exactly, instead of rounding it (implemented provisionally) | Confirmation only |
-| ADR-TXN-07 | Confirm rules 5–6: reject a split that rounds a holding or lot to zero, and dispose of cash in lieu through FIFO (implemented provisionally; rules 1–4 accepted 2026-10-31) | Confirmation only |
 | ADR-CSV-02 | Import staging model | P6 (deferred by the owner until the rest of the MVP is done) |
 
 Answered by the owner on 2026-10-31: ADR-ARCH-03, API-04, PORT-03, PORT-04,
 PORT-05, INST-04, NUM-04 (limits), NUM-05 (P3 and P4 rounding),
 LEDG-02, LEDG-07, LEDG-08, TXN-07 (rules 1–4), AUTH-10, AUTH-11, and no
-hard limit on ledger replay for the MVP.
+hard limit on ledger replay for the MVP. Answered on 2026-11-01, after
+comparing with the live Snowball Analytics app: INST-02 (deferring the
+metadata column), NUM-04 (grammar, sign rules, derived values, minor
+units), NUM-05 (rejecting unrepresentable results) and TXN-07 (rules 5–6).
