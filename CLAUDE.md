@@ -11,9 +11,10 @@ backend. The SvelteKit frontend is a separate repository.
 
 ## Sources of truth: read before implementing a phase
 
-1. [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md): scope, non-goals,
-   roadmap (P0–P6), phase deliverables, acceptance criteria, **current
-   status (§23)**, **next task (§24)**, and open questions (§22).
+1. [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md): MVP scope, the
+   **backlog (§4)**, roadmap (MVP P0–P5; P6 in the backlog), phase
+   deliverables, acceptance criteria, **current status (§23)**, **next
+   task (§24)**, and open questions (§22).
 2. [`docs/ARCHITECTURE_DECISIONS.md`](docs/ARCHITECTURE_DECISIONS.md):
    every decision, marked Accepted / Superseded / Proposed / Open.
 3. [`README.md`](README.md): how to run, configure and test the service.
@@ -40,9 +41,10 @@ that was never approved.
 ## Non-negotiable rules
 
 **Scope**
-- Excluded from the MVP: bonds, crypto, derivatives, margin, brokerage
-  integration, automated market data, sharing, and teams. Never add them
-  back.
+- Everything outside the MVP is in the backlog (`docs/PROJECT_PLAN.md`
+  §4, ADR-SCOPE-10): bonds, crypto, derivatives, margin, brokerage
+  integration, automated market data, sharing, teams, CSV import/export
+  (P6) and more. Do not build a backlog item until the owner schedules it.
 - Do not implement later phases early. Do not add speculative abstractions,
   such as generic repository traits, RBAC or plugin systems.
 
@@ -150,8 +152,6 @@ ownership, ledger, FIFO, decimals, valuation, import) need deeper review:
   settings unless the owner explicitly asks.
 - No destructive commands (`reset --hard`, `clean -fd`, force push,
   branch deletion) on the owner's work.
-- Do not create or switch branches unless the owner asks. The owner
-  reviews and commits changes.
 
 ## Multi-agent coordination
 

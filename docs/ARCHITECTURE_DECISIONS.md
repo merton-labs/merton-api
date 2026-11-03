@@ -42,47 +42,37 @@ Every decision uses the same fields:
 - **Status:** Accepted · **Source:** Owner · **Phases:** all
 - **Decision:** Merton Labs is an open-source, self-hosted, multi-user
   investment portfolio tracker, inspired by Snowball Analytics. It records
-  transactions and reports holdings, cash, cost basis, income, valuation,
-  allocation and CSV import/export. It is **not** a brokerage, an
-  order-execution service, or a quantitative analytics engine.
+  transactions and reports holdings, cash, cost basis, income, valuation
+  and allocation. It is **not** a brokerage, an order-execution service,
+  or a quantitative analytics engine.
 - **Rationale:** Financial correctness, reasonable security, simple
   self-hosting and maintainability are the product goals.
-- **Consequences:** Any feature that executes trades, connects to brokers,
-  or performs advanced analytics is out of scope until the owner approves it.
+- **Consequences:** Trading, broker connections and advanced analytics
+  stay in the backlog (ADR-SCOPE-10) until the owner schedules them.
 
 ### ADR-SCOPE-02 — MVP asset classes
-- **Status:** Accepted · **Source:** Owner · **Phases:** P2B–P6
+- **Status:** Accepted · **Source:** Owner · **Phases:** P2B–P5
 - **Decision:** The MVP supports Thai stocks, international stocks, ETFs,
   mutual funds, cash, and bank deposits.
 - **Consequences:** Data models, validation and tests cover only these asset
   classes. See ADR-INST-04 for the fixed allocation classes.
 
 ### ADR-SCOPE-03 — Bonds and fixed income in the MVP
-- **Status:** Superseded by ADR-SCOPE-05 · **Source:** Owner
-- **Decision (historical):** The initial architecture review included bond
-  accounting in the MVP.
-- **Consequences:** Removed after the architecture review. Do **not** add
-  bond accrual, coupon, amortization or maturity logic.
+- **Status:** Superseded by ADR-SCOPE-05, then ADR-SCOPE-10 · **Source:** Owner
+- **Decision (historical):** in the first architecture review's MVP; then
+  excluded; now in the backlog.
 
 ### ADR-SCOPE-04 — Cryptocurrency and stablecoins in the MVP
-- **Status:** Superseded by ADR-SCOPE-05 · **Source:** Owner
-- **Decision (historical):** The initial architecture review included
-  crypto assets.
-- **Consequences:** Removed from the MVP. Do **not** add crypto instruments,
-  wallets or on-chain data.
+- **Status:** Superseded by ADR-SCOPE-05, then ADR-SCOPE-10 · **Source:** Owner
+- **Decision (historical):** in the first architecture review's MVP; then
+  excluded; now in the backlog.
 
 ### ADR-SCOPE-05 — Explicit MVP exclusions
-- **Status:** Accepted · **Source:** Owner · **Phases:** all
-- **Decision:** These are excluded from the MVP:
-  - bonds and fixed income
-  - cryptocurrency and stablecoins
-  - options, futures, margin trading engines and derivatives pricing
-  - automated brokerage integration and automated market-data feeds
-  - advanced performance and risk analytics
-  - benchmark comparison and portfolio optimization
-  - sharing and collaboration
-- **Consequences:** Older notes that mention these are obsolete. Do not
-  reintroduce them without a new owner decision.
+- **Status:** Superseded by ADR-SCOPE-10 (owner, 2026-11-03) · **Source:** Owner
+- **Decision (historical):** excluded bonds, crypto, derivatives and
+  margin, brokerage integration and automated market data, advanced
+  analytics, benchmarks and optimization, and sharing. They are now
+  backlog items, not exclusions.
 
 ### ADR-SCOPE-06 — SabiQuant is not an MVP dependency
 - **Status:** Accepted · **Source:** Owner · **Phases:** none (post-MVP)
@@ -101,22 +91,30 @@ Every decision uses the same fields:
 - **Consequences:**
   - Each ADR that applies this rule cites the Snowball page it follows,
     or says that Snowball documents nothing on the point.
-  - The rule does not override Accepted decisions, the MVP exclusions
-    (ADR-SCOPE-05), or the precision rules (ADR-NUM-01 … NUM-05).
+  - The rule does not override Accepted decisions, the precision rules
+    (ADR-NUM-01 … NUM-05), or pull backlog items (ADR-SCOPE-10) into scope.
 
 ### ADR-SCOPE-09 — CSV import and export after the MVP
-- **Status:** Accepted · **Source:** Owner (2026-11-01) · **Phases:** P6
-- **Decision:** CSV import and export (P6) are moved out of the MVP. The
-  MVP ends with P5. Prices and FX rates are entered by hand until P6 is
-  scheduled.
+- **Status:** Superseded by ADR-SCOPE-10 (owner, 2026-11-03) · **Source:** Owner (2026-11-01)
+- **Decision (historical):** moved CSV import and export (P6) out of the
+  MVP, so the MVP ends with P5. P6 is now a backlog item.
+
+### ADR-SCOPE-10 — Backlog instead of exclusions
+- **Status:** Accepted · **Source:** Owner (2026-11-03) · **Phases:** none until scheduled
+- **Decision:** Everything outside the MVP is a **backlog** item: not
+  part of the MVP, not ruled out. That covers what ADR-SCOPE-05 excluded
+  and CSV import and export (P6, formerly ADR-SCOPE-09). The list is
+  [PROJECT_PLAN.md §4](PROJECT_PLAN.md#4-backlog). The MVP is P0–P5.
 - **Consequences:**
-  - The CSV decisions (ADR-CSV-01 … CSV-05, ADR-INST-05) stay Accepted
-    and apply when P6 is scheduled. ADR-CSV-02's open detail no longer
-    blocks the MVP.
-  - The `IMPORT` value of `source` (ADR-VAL-06) stays in the schema,
-    unused until P6.
-  - Unlike ADR-SCOPE-05, this is a deferral, not an exclusion: P6 stays
-    on the roadmap.
+  - Nothing in the backlog is built until the owner schedules it. A
+    scheduled item gets its own phase or ADR first, as ADR-DIV-01 and
+    ADR-RET-01 did.
+  - Backlog items that change the fixed stack (Redis, Kubernetes, a BFF)
+    must also supersede ADR-STACK-01 … 04.
+  - The CSV decisions (ADR-CSV-01 … CSV-05, ADR-INST-05) stay Accepted for
+    P6; ADR-CSV-02's open detail is decided when P6 is scheduled. The
+    `IMPORT` value of `source` (ADR-VAL-06) stays in the schema, unused.
+  - Supersedes ADR-SCOPE-05 and ADR-SCOPE-09.
 
 ---
 
@@ -1376,7 +1374,7 @@ Every decision uses the same fields:
   - **`fx_rates`:** `owner_user_id` (`RESTRICT`), `base_currency`,
     `quote_currency`, date-only `rate_date`, decimal-text `rate`, `source`.
     Unique on (owner, base, quote, date).
-  - **`source`:** `MANUAL` (entered through the API) or `IMPORT` (P6), with
+  - **`source`:** `MANUAL` (entered through the API) or `IMPORT` (P6, backlog), with
     a `CHECK` constraint (ADR-DB-08). The API always sets `MANUAL`; an
     edit keeps the original source.
 - **Values:**
@@ -1467,7 +1465,7 @@ Every decision uses the same fields:
     counted as zero (as in ADR-VAL-04).
 - **Not included:** Snowball's forward-looking figures (yield, expected
   annual dividends, future payments, dividend rating), which need
-  automated market data (ADR-SCOPE-05), and its sector and category
+  automated market data (backlog, ADR-SCOPE-10), and its sector and category
   breakdowns, which need instrument metadata Merton does not store.
 - **Consequences:** periods and charts are chosen by the client; the API
   only filters by date. Checked against the owner's Snowball portfolio:
@@ -1506,7 +1504,7 @@ Every decision uses the same fields:
 - **Not included (owner, 2026-11-02):** figures in the base currency
   (Snowball's "In USD" mode, which needs the FX rate on every purchase
   date); Daily, which needs daily prices; and IRR, an advanced performance
-  analytic excluded by ADR-SCOPE-05.
+  analytic in the backlog (ADR-SCOPE-10).
 - **Checked** against the owner's Snowball portfolio on 2026-11-02: cost
   basis, capital gain, dividends, realized P&L, fees, total profit and
   both percentages match for every open holding but V. **Known
@@ -1520,8 +1518,8 @@ Every decision uses the same fields:
 
 ## 14. CSV import and export
 
-These decisions apply to P6, which the owner moved out of the MVP on
-2026-11-01 (ADR-SCOPE-09).
+These decisions apply to P6, a backlog item (ADR-SCOPE-10). They stay
+Accepted for when the owner schedules it.
 
 ### ADR-CSV-01 — Import and export types
 - **Status:** Accepted · **Source:** Owner · **Phases:** P6
@@ -1536,7 +1534,7 @@ These decisions apply to P6, which the owner moved out of the MVP on
   - **Mapping:** dynamic column mapping, plus configurable date and
     decimal formats.
   - **Errors:** reported per row.
-  - **Execution:** synchronous in the MVP.
+  - **Execution:** synchronous.
   - **Limits:** 20 MB per file and 50,000 rows.
 - **Open detail:** where import state lives between steps, for example a
   server-side staging table versus a stateless re-submit.
@@ -1558,8 +1556,8 @@ These decisions apply to P6, which the owner moved out of the MVP on
 
 ### ADR-CSV-05 — No broker adapter framework
 - **Status:** Accepted · **Source:** Owner · **Phases:** P6
-- **Decision:** No broker-specific adapter framework in the MVP. Generic
-  column mapping only.
+- **Decision:** P6 uses generic column mapping only. Broker-specific
+  adapters are a separate backlog item (ADR-SCOPE-10).
 
 ---
 
@@ -1626,7 +1624,7 @@ These decisions apply to P6, which the owner moved out of the MVP on
 
 | ID | Topic | Blocks |
 | --- | --- | --- |
-| ADR-CSV-02 | Import staging model | P6, after the MVP (ADR-SCOPE-09); nothing in the MVP |
+| ADR-CSV-02 | Import staging model | P6, a backlog item (ADR-SCOPE-10); nothing in the MVP |
 Answered by the owner on 2026-10-31: ADR-ARCH-03, API-04, PORT-03, PORT-04,
 PORT-05, INST-04, NUM-04 (limits), NUM-05 (P3 and P4 rounding),
 LEDG-02, LEDG-07, LEDG-08, TXN-07 (rules 1–4), AUTH-10, AUTH-11, and no
@@ -1636,4 +1634,5 @@ metadata column), NUM-04 (grammar, sign rules, derived values, minor
 units), NUM-05 (rejecting unrepresentable results) and TXN-07 (rules 5–6).
 Also on 2026-11-01, the owner moved CSV import and export out of the MVP
 (ADR-SCOPE-09), and took fees and taxes out of cost basis to match
-Snowball (ADR-LEDG-11, superseding LEDG-10).
+Snowball (ADR-LEDG-11, superseding LEDG-10). On 2026-11-03 the owner turned
+the MVP exclusions and P6 into a backlog (ADR-SCOPE-10).

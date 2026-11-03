@@ -19,6 +19,12 @@ change between minor versions.
   their percentages in the quote currency, as in Snowball's Holdings table
   (ADR-RET-01).
 
+### Changed
+
+- Everything outside the MVP, including CSV import and export (P6), is now
+  a backlog item the owner can schedule, instead of an exclusion
+  (ADR-SCOPE-10, `docs/PROJECT_PLAN.md` §4). Docs only.
+
 ## [0.1.0] - 2026-11-01
 
 The first release: the MVP (phases P0–P5 in
