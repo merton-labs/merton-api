@@ -9,7 +9,7 @@ Backend for **Merton**, an open-source, self-hosted, multi-user investment portf
 > taxes and tax returns, cash transfers, FX exchanges, stock splits and
 > stock dividends) are implemented, along with manually entered
 > historical prices and FX rates, and holdings, valuation and allocation
-> at any date. CSV import and export come after the MVP. See
+> at any date. CSV import and export are in the backlog. See
 > [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the roadmap and
 > [CLAUDE.md](CLAUDE.md) for contributor rules.
 
@@ -112,8 +112,8 @@ symbol, ISIN and exchange are optional and need not be unique, and ISINs
 are checked against their check digit. Cash, including bank deposits, lives
 in cash accounts: a portfolio can have several, even in the same currency.
 
-Prices and FX rates are entered by hand (CSV import comes after the MVP);
-nothing is fetched automatically. A price is in its instrument's quote
+Prices and FX rates are entered by hand (CSV import and automated feeds
+are in the backlog); nothing is fetched automatically. A price is in its instrument's quote
 currency and may be zero; a rate must be greater than zero. Market FX rates are separate
 from the amounts recorded by `FX_EXCHANGE` transactions. An instrument with
 prices cannot be deleted (`409 instrument_in_use`).

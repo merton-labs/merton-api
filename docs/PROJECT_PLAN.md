@@ -21,7 +21,8 @@ Merton Labs is an Apache-2.0, self-hosted, multi-user investment portfolio
 tracker inspired by Snowball Analytics. Each user privately manages their
 own portfolios: they record transactions and see holdings, cash, FIFO cost
 basis, income, valuation in a chosen base currency, and asset allocation.
-CSV import and export come after the MVP (owner, 2026-11-01).
+CSV import and export, like everything else outside the MVP, are in the
+backlog (§4).
 
 This repository is the Rust/Axum REST API. The SvelteKit frontend lives in a
 separate repository.
@@ -38,7 +39,7 @@ separate repository.
 | P3 (ledger, FIFO) | Completed (`fc538e1`, CI green; decisions confirmed 2026-10-31 and 2026-11-01) |
 | P4 (financial transactions, corporate actions) | Completed (PR #1, merge `725023d`, CI green (run 41078791140); decisions confirmed 2026-10-31 and 2026-11-01) |
 | P5 (valuation, FX, allocation) | Completed: storage in PR #1; holdings, valuation and allocation in PR #2, merge `67c3d1d`, CI green (run 41083764335) |
-| P6 (CSV import and export) | Moved out of the MVP (owner, 2026-11-01) |
+| P6 (CSV import and export) | Backlog (owner, 2026-11-03, ADR-SCOPE-10) |
 
 ## 2. Product Goals
 
@@ -72,31 +73,27 @@ separate repository.
 | Market data | Manually entered historical prices and FX rates |
 | Reporting | On-demand valuation at `as_of`, partial valuation, signed allocation by asset class |
 
-## 4. Explicit Non-goals
+## 4. Backlog
 
-From ADR-SCOPE-05 and the transaction rules:
+Not in the MVP, not ruled out (owner, 2026-11-03, ADR-SCOPE-10). Nothing
+here is built until the owner schedules it; a scheduled item gets its own
+phase or ADR first. Already built after the MVP this way: dividends
+received (ADR-DIV-01) and returns per holding (ADR-RET-01).
 
-- **Excluded asset classes:** bonds and fixed income; cryptocurrency and
-  stablecoins; options, futures and other derivatives.
-- **Excluded trading features:** margin engines, brokerage integration,
-  order execution.
-- **Excluded data features:** automated market-data feeds; advanced
-  performance or risk analytics; benchmarks; optimization.
-- **Excluded collaboration features:** sharing, collaboration, teams,
-  organizations, workspaces, invitations, public portfolios.
-- **Excluded auth features:** OAuth or social login, MFA/TOTP, JWT,
-  email delivery infrastructure.
-- **Excluded tax features:** country-specific tax reporting; automatic fee
-  or tax calculation.
-- **Deferred corporate actions:** spin-offs, mergers, rights issues,
-  return of capital.
-- **Moved after the MVP:** CSV import and export (P6; owner, 2026-11-01,
-  ADR-SCOPE-09).
-- **Excluded import features:** broker-specific CSV adapter frameworks;
-  asynchronous import jobs.
-- **Excluded infrastructure:** Redis, Kubernetes, message brokers,
-  mandatory cloud services, a SvelteKit BFF.
-- **Not an MVP dependency:** SabiQuant.
+| Area | Items | Notes |
+| --- | --- | --- |
+| Data exchange | CSV import and export (P6) | Decisions on record: ADR-CSV-01 … CSV-05, ADR-INST-05. Decide the staging model (ADR-CSV-02, §22 question 15) first. Risks: formula injection on export; long synchronous imports on SQLite |
+| Import | Broker-specific CSV adapters; asynchronous import jobs | P6 itself uses generic mapping (ADR-CSV-05) |
+| Market data | Automated price and FX feeds | Until then prices and FX rates are entered by hand (§11) |
+| Assets | Bonds and fixed income; cryptocurrency and stablecoins; options, futures and other derivatives | The MVP classes are fixed by ADR-SCOPE-02 |
+| Trading | Margin engines; brokerage integration; order execution | |
+| Analytics | Advanced performance and risk analytics (IRR, TWR, beta, Sharpe); benchmarks; optimization | |
+| Collaboration | Sharing, teams, organizations, workspaces, invitations, public portfolios | |
+| Auth | OAuth or social login; MFA/TOTP; JWT; email delivery; account recovery | ADR-AUTH-10 |
+| Tax | Country-specific tax reporting; automatic fee or tax calculation | |
+| Corporate actions | Spin-offs, mergers, rights issues, return of capital | |
+| Infrastructure | Redis, Kubernetes, message brokers, mandatory cloud services, a SvelteKit BFF | Must also supersede the fixed stack (ADR-STACK-01 … 04) |
+| Integrations | SabiQuant | ADR-SCOPE-06 |
 
 ## 5. Technology Stack
 
@@ -191,7 +188,7 @@ Implemented tables are marked ✅; everything else is planned.
 | `cash_movements` ✅ | transaction | P3 | signed `amount_delta` per cash account (source of balances) |
 | `instrument_prices` ✅ | via instrument | P5 | `price_date`, decimal-text `price`, `source`; unique per instrument and date (ADR-VAL-06) |
 | `fx_rates` ✅ | user | P5 | `base_currency`, `quote_currency`, `rate_date`, decimal-text `rate` (1 base = rate quote), `source`; unique per owner, pair and date |
-| import records | user/portfolio | P6 (after the MVP) | upload, mapping, row results, audit |
+| import records | user/portfolio | P6 (backlog) | upload, mapping, row results, audit |
 
 The ledger's physical schema (ADR-LEDG-02) was implemented in P3 and P4;
 the owner confirmed it on 2026-10-31.
@@ -300,8 +297,8 @@ ADR-NUM-01 … NUM-05:
 ## 11. Market Data and FX
 
 - **Prices:**
-  - Historical instrument prices are entered manually (no automated
-    feeds; CSV import comes after the MVP).
+  - Historical instrument prices are entered manually (automated feeds
+    and CSV import are in the backlog, §4).
   - Each price has a date and a source.
 - **FX rates:**
   - Historical FX rates are user-scoped. Direct and inverse pairs are
@@ -337,29 +334,8 @@ ADR-VAL-01 … VAL-05:
 
 ## 13. CSV Import/Export
 
-**After the MVP** (owner, 2026-11-01, ADR-SCOPE-09). These rules stay on
-record for when P6 is scheduled.
-
-ADR-CSV-01 … CSV-05, ADR-INST-05:
-
-- **Import types:** transactions, instrument prices, FX rates.
-- **Workflow:** upload → preview → map → validate → resolve → commit,
-  synchronous. Limits: 20 MB and 50,000 rows.
-- **Mapping:** dynamic column mapping; configurable date and decimal
-  formats.
-- **Validation:** errors reported per row.
-- **Instruments:** never created automatically. Unambiguous matches are
-  applied automatically; ambiguous ones go to user review.
-- **Duplicates:**
-  - source-scoped external IDs for confirmed matches
-  - fingerprints for potential duplicates
-  - explicit user review; never auto-merged with manual entries
-- **Commit:** the selected valid rows are committed atomically after FIFO
-  and ledger revalidation.
-- **Export:** respects ownership. Cells must be escaped against spreadsheet
-  formula injection (§21).
-- **Known risk:** large synchronous imports may hit request timeouts and
-  long write locks on SQLite. Measure during P6.
+In the backlog (§4, ADR-SCOPE-10). The rules for when P6 is scheduled are
+ADR-CSV-01 … CSV-05 and ADR-INST-05.
 
 ## 14. API Contract Standards
 
@@ -409,21 +385,19 @@ ADR-API-01 … API-06:
 | **P3** | Transaction Ledger & FIFO | ✅ Completed (`fc538e1`, CI green) |
 | **P4** | Financial Transactions & Corporate Actions | ✅ Completed (PR #1, merge `725023d`, CI green (run 41078791140)) |
 | **P5** | Valuation, FX & Asset Allocation | ✅ Completed (step 1 in PR #1; step 2 in PR #2) |
-| **P6** | CSV Import & Export | ➖ After the MVP (deferred 2026-10-30; moved out of the MVP 2026-11-01, owner) |
+| **P6** | CSV Import & Export | ➖ Backlog (owner, 2026-11-03, ADR-SCOPE-10) |
 
 Phases are implemented in order. Do not merge phases, and do not pull
-later-phase work forward. The backend MVP ends with P5: the owner moved P6
-out of the MVP on 2026-11-01 (ADR-SCOPE-09). Frontend integration is a separate
+later-phase work forward. The backend MVP ends with P5; P6 is in the
+backlog (§4, ADR-SCOPE-10). Frontend integration is a separate
 workstream that can start once the API milestones it needs are stable.
 
 ## 16. Phase Dependencies
 
 ```mermaid
 flowchart LR
-  P0 --> P1 --> P11[P1.1] --> P2A --> P2B --> P3 --> P4 --> P5 --> P6
+  P0 --> P1 --> P11[P1.1] --> P2A --> P2B --> P3 --> P4 --> P5
   P3 -. FIFO / holdings .-> P5
-  P3 -. ledger validation .-> P6
-  P5 -. prices / FX tables .-> P6
 ```
 
 | Phase | Hard prerequisites | Decisions needed before starting |
@@ -433,7 +407,7 @@ flowchart LR
 | P3 ✅ | P2B | Done; confirmed 2026-10-31, and the decimal grammar and sign rules (ADR-NUM-04) and rejecting unrepresentable results (ADR-NUM-05) on 2026-11-01 |
 | P4 ✅ | P3 | Done; confirmed 2026-10-31, and ADR-TXN-07 rules 5–6 on 2026-11-01 |
 | P5 ✅ | P3, P4 | Done (ADR-VAL-07 accepted 2026-10-30) |
-| P6 (after the MVP) | P3, P4, P5 | ADR-CSV-02 staging model |
+| P6 (backlog) | P3, P4, P5 | ADR-CSV-02 staging model |
 
 ## 17. Phase Deliverables
 
@@ -971,28 +945,12 @@ P2A onward are *Proposed* until they are implemented.
 - **Excluded:** automated feeds, benchmarks, performance and risk analytics.
 
 ### P6 — CSV Import & Export
-- **Status:** Not started. Deferred by the owner (2026-10-30) until the
-  rest of the MVP was done, then moved out of the MVP (2026-11-01,
-  ADR-SCOPE-09).
-- **Objective:** bulk data in and out, safely.
-- **Dependencies:** P3, P4 and P5. Decision ADR-CSV-02 must be made first.
-- **Scope:**
-  - **Workflow:** upload, mapping, preview, validation, instrument
-    matching, duplicate detection, conflict resolution, then an atomic
-    commit of the selected rows with ledger revalidation
-  - **Export:** CSV
-  - **Audit:** import audit records
-  - **Limits:** 20 MB and 50,000 rows
-- **Tests:**
-  - **Atomicity:** partial failure commits nothing
-  - **Correctness:** revalidation rejects imports that break FIFO
-  - **Duplicates:** external-ID and fingerprint detection
-  - **Instruments:** ambiguous instruments require review; no
-    auto-creation
-  - **Ownership:** cross-user isolation for both import and export
-  - **Limits:** size and row-count limits enforced
-  - **Security:** formula-injection escaping on export
-- **Excluded:** broker adapters, asynchronous jobs.
+- **Status:** Backlog (owner, 2026-11-03, ADR-SCOPE-10). Not started.
+- **When scheduled:** decide the staging model (ADR-CSV-02) first, then
+  plan from ADR-CSV-01 … CSV-05, ADR-INST-05 and the `import records`
+  table (§7). Acceptance must cover atomic, revalidated commits; duplicate
+  review; the 20 MB / 50,000-row limits; owner-scoped, formula-injection-safe
+  export; and cross-user tests for import and export.
 
 ## 18. Acceptance Criteria
 
@@ -1050,11 +1008,6 @@ P2A onward are *Proposed* until they are implemented.
   - [x] Valuation at `as_of` uses only data on or before that date.
   - [x] Partial results are explicit.
   - [x] Allocation is signed, with NPV ≤ 0 giving null.
-- **P6** (after the MVP):
-  - [ ] Imports are atomic and revalidated.
-  - [ ] Duplicates go to review.
-  - [ ] Limits are enforced.
-  - [ ] Export is owner-scoped and injection-safe.
 
 ## 19. Testing Strategy
 
@@ -1121,8 +1074,6 @@ tests, and `unsafe_code` is forbidden.
 | Passwords not zeroized in memory | Accepted residual |
 | IDOR on new resources | Mitigate with owner-scoped queries + cross-user tests every phase (ADR-OWN-03/05) |
 | Decimal precision loss via SQLite affinity or float | Mitigate per ADR-NUM-01/02; round-trip tests in P2B/P3 |
-| CSV formula injection on export | Must escape in P6 (after the MVP) |
-| Large synchronous imports (timeouts, long write locks) | Measure and bound in P6 (after the MVP) |
 
 ## 22. Open Questions
 
@@ -1131,8 +1082,8 @@ the IDs refer to [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#16-open-d
 
 Questions 1–10 were confirmed by the owner on 2026-10-31, and the parts
 left open on 2026-11-01, after comparing with the live Snowball Analytics
-app. Only question 15 is still open, and it belongs to P6, which is now
-after the MVP.
+app. Only question 15 is still open, and it belongs to P6, which is in
+the backlog.
 
 1. ~~**ADR-ARCH-03:** module organization.~~ Answered: keep the current
    hybrid.
@@ -1166,9 +1117,8 @@ after the MVP.
     to zero; dispose of cash in lieu through FIFO) on 2026-11-01.
 14. ~~**ADR-VAL-02:** price and FX staleness threshold.~~ Answered
     2026-10-30: stale after 7 days for prices and 3 days for FX rates.
-15. **ADR-CSV-02:** import staging model. *Deferred 2026-10-30:* the owner
-    put P6 after the rest of the MVP. *Moved out of the MVP 2026-11-01*
-    with P6. Recommendation on record: a server-side staging table, with
+15. **ADR-CSV-02:** import staging model, decided when P6 leaves the
+    backlog. Recommendation on record: a server-side staging table, with
     rows expiring after 24 hours.
 16. ~~**Performance:** limits for ledger replay on large portfolios.~~
     Answered 2026-10-31: no hard limit for the MVP.
@@ -1240,33 +1190,25 @@ every screen (merton-web PR #5).
 | Financial transactions, corporate actions (P4) | ✅ Done (PR #1) | migrations `m20261030_000007/8`; `src/ledger/{transaction,fifo,decimal}.rs`; `tests/ledger.rs` |
 | Prices, FX rates (P5 step 1) | ✅ Done (PR #1) | migration `m20261030_000009`; `src/market_data/`; `src/http/market_data.rs`; `tests/market_data.rs` |
 | Holdings, valuation, allocation (P5 step 2) | ✅ Done (PR #2) | `src/valuation/`; `src/http/valuation.rs`; `tests/valuation.rs` |
-| CSV (P6) | ➖ Not in the MVP | ADR-SCOPE-09 (owner, 2026-11-01) |
+| CSV (P6) | ➖ Backlog | ADR-SCOPE-10 (owner, 2026-11-03) |
 | Dividends received (after the MVP) | ✅ Done | ADR-DIV-01; `src/dividends/`; `src/http/dividends.rs`; `tests/dividends.rs` |
 | Returns per holding (after the MVP) | ✅ Done | ADR-RET-01; `src/returns/`; `src/http/returns.rs`; `tests/returns.rs` |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Session purge | ✅ Done (PR #3, merge `a2bcbb9`, run 41106885927) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
-| Account recovery | ➖ Not in the MVP | ADR-AUTH-10 (owner, 2026-10-31) |
+| Account recovery | ➖ Backlog | ADR-AUTH-10 (owner, 2026-10-31) |
 | Deployment & CI Docker smoke | ✅ Done (PR #4, merge `b3ea53b`, run 41176020573) | `.github/workflows/ci.yml` (`docker` job); full-stack Compose + `merton-web/scripts/smoke.sh` (passed locally 2026-10-31; passed again 2026-11-01 under Podman on Windows (WSL), with data kept across an `api` restart) |
 
 ## 24. Next Recommended Task
 
-1. **The MVP is complete.** The owner moved CSV import and export (P6)
-   out of the MVP on 2026-11-01 (ADR-SCOPE-09), so the MVP ends with P5.
+1. **The MVP is complete** (P0–P5). CSV import and export (P6) and every
+   other non-MVP item are in the backlog (§4, ADR-SCOPE-10).
    Done on 2026-10-31: the session purge (ADR-AUTH-11), the replay
    measurement (§22, question 16), the decision on account recovery (none
    in the MVP), most confirmations, and deployment (the CI `docker` job
    and the full-stack Docker Compose stack in `merton-web`). Done on
    2026-11-01: the remaining confirmations (ADR-INST-02, NUM-04, NUM-05,
    TXN-07 rules 5–6), checked against the live Snowball Analytics app.
-2. **P6 — CSV Import & Export**, after the MVP, when the owner schedules
-   it. It still needs ADR-CSV-02, the staging model (§22, question 15).
-
-Implementation notes for P6:
-
-- **Commit:** reuse the ledger write path, so imported transactions are
-  revalidated against the combined history in one atomic transaction
-  (ADR-CSV-04, ADR-DB-09).
-- **Prices and FX rates:** imported rows use `source = IMPORT`, which the
-  schema already allows (ADR-VAL-06).
-- **Instruments:** never created automatically (ADR-INST-05).
-- **Export:** owner-scoped, with formula-injection escaping.
+2. **Backlog** (§4): nothing is scheduled. When the owner schedules an
+   item, give it a phase or ADR first. For P6, reuse the ledger write path
+   (ADR-CSV-04, ADR-DB-09) and store imported prices and rates with
+   `source = IMPORT` (ADR-VAL-06).
