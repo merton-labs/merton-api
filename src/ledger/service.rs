@@ -24,7 +24,7 @@ use super::transaction::{
 };
 use crate::auth::{FieldError, UserId};
 use crate::cash_accounts::repository as cash_accounts;
-use crate::infrastructure::database::is_foreign_key_violation;
+use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::{cash_movement, position_movement, transaction};
 use crate::instruments::repository as instruments;
 use crate::pagination::{Page, Paged};
@@ -186,7 +186,7 @@ pub async fn list(
     instrument_id: Option<Uuid>,
     page: Page,
 ) -> Result<Paged<LedgerEntry>, LedgerError> {
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     if portfolios::find(&txn, owner, portfolio_id).await?.is_none() {
         return Err(LedgerError::NotFound);
     }

@@ -12,7 +12,7 @@ use super::repository;
 use super::{MAX_NAME_CHARS, Portfolio, PortfolioError, PortfolioList, PortfolioStatus};
 use crate::auth::{FieldError, UserId};
 use crate::cash_accounts::repository as cash_accounts;
-use crate::infrastructure::database::is_foreign_key_violation;
+use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::portfolio;
 use crate::ledger::repository as ledger;
 use crate::pagination::Page;
@@ -65,7 +65,7 @@ pub async fn list(
     page: Page,
 ) -> Result<PortfolioList, PortfolioError> {
     // One read transaction so `total` and `items` come from the same snapshot.
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     let total = repository::count(&txn, owner, status).await?;
     let models = repository::list(&txn, owner, status, page.limit, page.offset).await?;
     txn.commit().await?;

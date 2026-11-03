@@ -1,13 +1,13 @@
 //! Cash account use cases.
 
-use sea_orm::{DatabaseConnection, TransactionTrait};
+use sea_orm::DatabaseConnection;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::repository;
 use super::{CashAccount, CashAccountError, CashAccountList, MAX_NAME_CHARS};
 use crate::auth::UserId;
-use crate::infrastructure::database::is_foreign_key_violation;
+use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::cash_account;
 use crate::pagination::Page;
 use crate::portfolios::PortfolioStatus;
@@ -57,7 +57,7 @@ pub async fn list(
     portfolio_id: Uuid,
     page: Page,
 ) -> Result<CashAccountList, CashAccountError> {
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     if portfolios::find(&txn, owner, portfolio_id).await?.is_none() {
         return Err(CashAccountError::NotFound);
     }

@@ -363,16 +363,25 @@ async fn decimals_round_trip_exactly_as_text() {
         "-10000000.0999999999999999"
     );
     let db = app.db();
-    let row = db
-        .query_one_raw(Statement::from_string(
-            db.get_database_backend(),
+    let (sql, text) = if common::is_postgres(db) {
+        (
+            "SELECT pg_typeof(quantity)::text, pg_typeof(price)::text, pg_typeof(fee)::text \
+             FROM transactions",
+            "character varying",
+        )
+    } else {
+        (
             "SELECT typeof(quantity), typeof(price), typeof(fee) FROM transactions",
-        ))
+            "text",
+        )
+    };
+    let row = db
+        .query_one_raw(Statement::from_string(db.get_database_backend(), sql))
         .await
         .unwrap()
         .unwrap();
     for i in 0..3 {
-        assert_eq!(row.try_get_by_index::<String>(i).unwrap(), "text");
+        assert_eq!(row.try_get_by_index::<String>(i).unwrap(), text);
     }
 }
 
@@ -1129,12 +1138,22 @@ async fn transfer_history_protects_the_destination_account() {
 async fn transfer_destination_column_restricts_deletes() {
     let app = TestApp::new().await;
     let db = app.db();
+    let sql = if common::is_postgres(db) {
+        "SELECT target.table_name::text AS \"table\", target.column_name::text AS \"to\", \
+         rc.delete_rule::text AS on_delete \
+         FROM information_schema.referential_constraints rc \
+         JOIN information_schema.key_column_usage source \
+           ON source.constraint_name = rc.constraint_name \
+         JOIN information_schema.constraint_column_usage target \
+           ON target.constraint_name = rc.constraint_name \
+         WHERE source.table_name = 'transactions' \
+           AND source.column_name = 'destination_cash_account_id'"
+    } else {
+        "SELECT \"table\", \"to\", on_delete FROM pragma_foreign_key_list('transactions') \
+         WHERE \"from\" = 'destination_cash_account_id'"
+    };
     let row = db
-        .query_one_raw(Statement::from_string(
-            db.get_database_backend(),
-            "SELECT \"table\", \"to\", on_delete FROM pragma_foreign_key_list('transactions') \
-             WHERE \"from\" = 'destination_cash_account_id'",
-        ))
+        .query_one_raw(Statement::from_string(db.get_database_backend(), sql))
         .await
         .unwrap()
         .unwrap();

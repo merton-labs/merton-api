@@ -387,7 +387,7 @@ async fn delete_is_refused_when_records_reference_the_portfolio() {
     let db = app.db();
     let backend = db.get_database_backend();
     for sql in [
-        "CREATE TABLE ledger_probe (portfolio_id BLOB NOT NULL \
+        "CREATE TABLE ledger_probe (portfolio_id uuid NOT NULL \
          REFERENCES portfolios(id) ON DELETE RESTRICT)",
         "INSERT INTO ledger_probe (portfolio_id) SELECT id FROM portfolios",
     ] {
@@ -525,11 +525,13 @@ async fn owner_listing_index_exists() {
     let app = TestApp::new().await;
     let db = app.db();
 
+    let sql = if common::is_postgres(db) {
+        "SELECT indexname::text FROM pg_indexes WHERE tablename = 'portfolios'"
+    } else {
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'portfolios'"
+    };
     let rows = db
-        .query_all_raw(Statement::from_string(
-            db.get_database_backend(),
-            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'portfolios'",
-        ))
+        .query_all_raw(Statement::from_string(db.get_database_backend(), sql))
         .await
         .unwrap();
     let names: Vec<String> = rows
@@ -579,7 +581,7 @@ async fn deleting_another_users_portfolio_with_history_is_still_404() {
     let db = app.db();
     let backend = db.get_database_backend();
     for sql in [
-        "CREATE TABLE ledger_probe (portfolio_id BLOB NOT NULL \
+        "CREATE TABLE ledger_probe (portfolio_id uuid NOT NULL \
          REFERENCES portfolios(id) ON DELETE RESTRICT)",
         "INSERT INTO ledger_probe (portfolio_id) SELECT id FROM portfolios",
     ] {

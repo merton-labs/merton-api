@@ -102,7 +102,7 @@ received (ADR-DIV-01) and returns per holding (ADR-RET-01).
 | Language | Rust stable, edition 2024, MSRV 1.94 |
 | HTTP | Axum 0.8, Tokio, Tower / tower-http |
 | API docs | utoipa (OpenAPI), served at `/api/v1/openapi.json` |
-| Persistence | SeaORM 2 + SeaORM Migration/SeaQuery; SQLite now, PostgreSQL preferred later |
+| Persistence | SeaORM 2 + SeaORM Migration/SeaQuery; SQLite or PostgreSQL (ADR-DB-10) |
 | Serialization | Serde |
 | Logging | tracing + tracing-subscriber |
 | Auth crypto | `argon2`, `sha2`, `hmac`, `getrandom`, `base64ct` |
@@ -146,11 +146,11 @@ src/
 │   ├── extract.rs          # ApiJson, ClientIp, TrustedOrigin, CurrentSession, CsrfProtectedSession
 │   └── error.rs            # ApiError → RFC 9457 Problem Details
 └── infrastructure/
-    ├── database.rs         # pool + SQLite pragmas (only SQLite-specific code)
+    ├── database.rs         # pool, backend-specific settings and error codes
     ├── entities/           # user, user_session, portfolio, instrument, cash_account, transaction, position_movement, cash_movement
     └── migrations/         # m20261024_000001 … m20261024_000006, m20261030_000007 … m20261030_000009
 tests/
-├── common/mod.rs           # TestApp harness: isolated in-memory SQLite per test
+├── common/mod.rs           # TestApp harness: isolated SQLite (or PostgreSQL) DB per test
 ├── auth.rs  database.rs  http.rs  portfolios.rs  instruments.rs  cash_accounts.rs
 ├── ledger.rs  transactions_api.rs  fifo_spec.rs
 ```
@@ -1182,7 +1182,7 @@ every screen (merton-web PR #5).
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 318 passing | `cargo test --locked` (local) |
+| Tests | ✅ 319 passing on SQLite and on PostgreSQL 18 | `cargo test --locked`, and with `TEST_DATABASE_URL` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
@@ -1193,6 +1193,7 @@ every screen (merton-web PR #5).
 | CSV (P6) | ➖ Backlog | ADR-SCOPE-10 (owner, 2026-11-03) |
 | Dividends received (after the MVP) | ✅ Done | ADR-DIV-01; `src/dividends/`; `src/http/dividends.rs`; `tests/dividends.rs` |
 | Returns per holding (after the MVP) | ✅ Done | ADR-RET-01; `src/returns/`; `src/http/returns.rs`; `tests/returns.rs` |
+| PostgreSQL support (after the MVP) | 🟡 Branch `feat/postgres` | ADR-DB-10; `src/infrastructure/database.rs`; `tests/common/mod.rs`; SQLite→PostgreSQL data transfer not built yet |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Session purge | ✅ Done (PR #3, merge `a2bcbb9`, run 41106885927) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
 | Account recovery | ➖ Backlog | ADR-AUTH-10 (owner, 2026-10-31) |

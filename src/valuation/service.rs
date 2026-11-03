@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rust_decimal::Decimal;
-use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, TransactionTrait};
+use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr};
 use time::Date;
 use uuid::Uuid;
 
@@ -17,6 +17,7 @@ use super::{
 };
 use crate::auth::UserId;
 use crate::cash_accounts::repository as cash_accounts;
+use crate::infrastructure::database::begin_read;
 use crate::infrastructure::entities::fx_rate;
 use crate::instruments::AssetClass;
 use crate::instruments::repository as instruments;
@@ -36,7 +37,7 @@ pub async fn holdings(
     as_of: Option<&str>,
 ) -> Result<Holdings, ValuationError> {
     let as_of = parse_as_of(as_of)?;
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     let holdings = load_holdings(&txn, owner, portfolio_id, as_of).await?;
     txn.commit().await?;
     Ok(holdings)
@@ -50,7 +51,7 @@ pub async fn valuation(
     as_of: Option<&str>,
 ) -> Result<Valuation, ValuationError> {
     let as_of = parse_as_of(as_of)?;
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     let holdings = load_holdings(&txn, owner, portfolio_id, as_of).await?;
     let market = load_market_data(&txn, owner, &holdings).await?;
     txn.commit().await?;

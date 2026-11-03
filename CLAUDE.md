@@ -30,7 +30,8 @@ that was never approved.
 - **HTTP:** Axum, Tokio and Tower/tower-http; REST under `/api/v1`, with
   OpenAPI via utoipa.
 - **Persistence:** SeaORM, plus SeaORM Migration (in-crate, applied at
-  startup). SQLite now; schemas and queries stay PostgreSQL-portable.
+  startup). SQLite and PostgreSQL (ADR-DB-10); every change must pass the
+  tests on both.
 - **Other crates:** Serde; tracing.
 - **Deployment:** Docker and Docker Compose. No Redis, Kubernetes, message
   brokers or mandatory cloud services.
@@ -106,7 +107,8 @@ cargo test --locked
 ```
 
 Tests use `tests/common::TestApp`, which gives each test an isolated
-in-memory SQLite database. Concurrency tests use barriers or channels,
+in-memory SQLite database, or its own PostgreSQL database when
+`TEST_DATABASE_URL` is set (see README). Concurrency tests use barriers or channels,
 never sleeps. When a change touches runtime or deployment, also smoke-test
 it with `cargo run` plus curl, and with `docker compose up --build`.
 

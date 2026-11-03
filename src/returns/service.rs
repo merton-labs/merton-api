@@ -7,12 +7,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rust_decimal::Decimal;
-use sea_orm::{DatabaseConnection, DbErr, TransactionTrait};
+use sea_orm::{DatabaseConnection, DbErr};
 use time::Date;
 use uuid::Uuid;
 
 use super::{Holding, Returns, ReturnsError, compute};
 use crate::auth::UserId;
+use crate::infrastructure::database::begin_read;
 use crate::infrastructure::entities::transaction;
 use crate::instruments::AssetClass;
 use crate::instruments::repository as instruments;
@@ -42,7 +43,7 @@ pub async fn returns(
     as_of: Option<&str>,
 ) -> Result<Returns, ReturnsError> {
     let as_of = parse_as_of(as_of)?;
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     portfolios::find(&txn, owner, portfolio_id)
         .await?
         .ok_or(ReturnsError::NotFound)?;

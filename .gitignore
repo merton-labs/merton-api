@@ -29,3 +29,6 @@ rustc-ice-*.txt
 # Local SQLite data (the directory itself is kept)
 data/*
 !data/.gitkeep
+.neon
+node_modules/
+.env.local

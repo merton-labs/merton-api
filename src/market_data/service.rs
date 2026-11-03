@@ -4,14 +4,14 @@
 //! transaction is needed. Duplicates are caught by the unique indexes, so a
 //! concurrent insert of the same date cannot slip through.
 
-use sea_orm::{DatabaseConnection, DbErr, SqlErr, TransactionTrait};
+use sea_orm::{DatabaseConnection, DbErr, SqlErr};
 use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
 use super::repository::{self, DateRange, FxRateFilter, FxRateValues, PriceValues};
 use super::{FxRate, FxRateList, InstrumentPrice, MarketDataError, PriceList, Source};
 use crate::auth::{FieldError, UserId};
-use crate::infrastructure::database::is_foreign_key_violation;
+use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::{fx_rate, instrument_price};
 use crate::instruments::repository as instruments;
 use crate::ledger::decimal::{Price, Rate};
@@ -79,7 +79,7 @@ pub async fn list_prices(
     page: Page,
 ) -> Result<PriceList, MarketDataError> {
     let range = validate_range(&query)?;
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     if instruments::find(&txn, owner, instrument_id)
         .await?
         .is_none()
@@ -233,7 +233,7 @@ pub async fn list_fx_rates(
         dates,
     };
 
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     let total = repository::count_fx_rates(&txn, owner, &filter).await?;
     let models = repository::list_fx_rates(&txn, owner, &filter, page.limit, page.offset).await?;
     txn.commit().await?;

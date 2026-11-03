@@ -1,6 +1,6 @@
 //! Instrument use cases.
 
-use sea_orm::{DatabaseConnection, TransactionTrait};
+use sea_orm::DatabaseConnection;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -10,7 +10,7 @@ use super::{
     optional_isin,
 };
 use crate::auth::{FieldError, UserId};
-use crate::infrastructure::database::is_foreign_key_violation;
+use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::instrument;
 use crate::pagination::Page;
 use crate::validation::{CurrencyCode, DisplayName, check};
@@ -81,7 +81,7 @@ pub async fn list(
     class: Option<AssetClass>,
     page: Page,
 ) -> Result<InstrumentList, InstrumentError> {
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     let total = repository::count(&txn, owner, class).await?;
     let models = repository::list(&txn, owner, class, page.limit, page.offset).await?;
     txn.commit().await?;
