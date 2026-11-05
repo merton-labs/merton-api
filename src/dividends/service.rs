@@ -6,13 +6,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use sea_orm::{DatabaseConnection, DbErr, TransactionTrait};
+use sea_orm::{DatabaseConnection, DbErr};
 use time::Date;
 use uuid::Uuid;
 
 use super::{Dividends, DividendsError, Payment, Source, summarize};
 use crate::auth::{FieldError, UserId};
 use crate::cash_accounts::repository as cash_accounts;
+use crate::infrastructure::database::begin_read;
 use crate::infrastructure::entities::{fx_rate, transaction};
 use crate::instruments::AssetClass;
 use crate::instruments::repository as instruments;
@@ -33,7 +34,7 @@ pub async fn dividends(
     to: Option<&str>,
 ) -> Result<Dividends, DividendsError> {
     let (from, to) = parse_range(from, to)?;
-    let txn = db.begin().await?;
+    let txn = begin_read(db).await?;
     let portfolio = portfolios::find(&txn, owner, portfolio_id)
         .await?
         .ok_or(DividendsError::NotFound)?;

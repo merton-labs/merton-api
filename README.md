@@ -20,7 +20,7 @@ Backend for **Merton**, an open-source, self-hosted, multi-user investment portf
 | Language      | Rust (stable, edition 2024, MSRV 1.94)         |
 | HTTP          | Axum 0.8, Tower / tower-http                   |
 | Runtime       | Tokio                                          |
-| Database      | SQLite via SeaORM 2 (PostgreSQL planned)       |
+| Database      | SQLite or PostgreSQL via SeaORM 2              |
 | Migrations    | SeaORM Migration (inside this crate)           |
 | OpenAPI       | utoipa                                         |
 | Passwords     | Argon2id (`argon2`, OWASP default parameters)  |
@@ -241,7 +241,7 @@ working directory is loaded if present.
 | -------------------------- | --------------------------------------------- | ---------------------------------------- |
 | `APP_HOST`                 | `127.0.0.1`                                   | IP address to bind                       |
 | `APP_PORT`                 | `8080`                                        | Port to bind                             |
-| `DATABASE_URL`             | `sqlite://data/merton.db`                     | Database URL                             |
+| `DATABASE_URL`             | `sqlite://data/merton.db`                     | Database URL: `sqlite://…` or `postgres://…` |
 | `DATABASE_MAX_CONNECTIONS` | `5`                                           | Maximum pool size (must be > 0)          |
 | `DATABASE_BUSY_TIMEOUT_MS` | `5000`                                        | SQLite busy timeout in milliseconds      |
 | `APP_SECRET_KEY`           | **required**                                  | Server secret, ≥ 32 bytes; keep it stable across restarts |
@@ -252,7 +252,17 @@ working directory is loaded if present.
 | `RUST_LOG`                 | `merton_api=info,tower_http=info,sqlx=warn`   | Log filter (`tracing` EnvFilter syntax)  |
 
 SQLite connections always enable foreign keys and WAL journaling, and the
-database file is created if it does not exist.
+database file is created if it does not exist. A PostgreSQL database must
+already exist; migrations create the tables on startup. TLS is supported, so
+hosted services work with their `sslmode=require` URLs. On Neon, use the
+direct connection string (no `-pooler` in the host): migrations run at
+startup, and the server keeps its own small pool. `neon env pull` writes it
+to `.env.local` as `DATABASE_URL_UNPOOLED`; the server reads only
+`DATABASE_URL` (and `.env`), so set `DATABASE_URL` to that value. The driver
+ignores Neon's `channel_binding=require` with a warning; `sslmode=require`
+still enforces TLS.
+Moving existing data from SQLite to PostgreSQL is not automated yet
+(ADR-DB-10).
 
 Behind a reverse proxy, set `APP_TRUSTED_ORIGINS` to the public URL (for
 example `https://merton.example.com`) and `TRUSTED_PROXIES` to the proxy's IP
@@ -362,8 +372,17 @@ cargo test --locked
 ```
 
 Tests use an isolated in-memory SQLite database per test and need no external
-services. CI runs the same checks on every push to `main` and every pull request,
-and also builds the Docker image and smoke-tests `GET /api/v1/health`.
+services. To run the same suite on PostgreSQL, point `TEST_DATABASE_URL` at a
+server; each test creates its own `merton_test_*` database there, which you
+can drop afterwards:
+
+```bash
+TEST_DATABASE_URL=postgres://localhost/postgres cargo test --locked
+```
+
+CI runs the same checks on every push to `main` and every pull request, runs
+the tests again on PostgreSQL 18, and builds the Docker image and
+smoke-tests `GET /api/v1/health`.
 
 ## Project layout
 

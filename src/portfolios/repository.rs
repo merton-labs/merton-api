@@ -15,6 +15,12 @@ use crate::infrastructure::entities::portfolio::{self, Column, Entity};
 
 /// `SELECT 1 FROM portfolios WHERE id = ? AND owner_user_id = ? [AND status = 'ACTIVE']`,
 /// for use in `EXISTS` guards on tables that belong to a portfolio.
+///
+/// With `active_only`, the guard is for a write and adds `FOR SHARE`. On
+/// PostgreSQL that waits for a concurrent archive or delete of the portfolio
+/// (both take a row lock first, see [`lock_owned`]) and then re-checks the
+/// row, so the write cannot slip past them. SQLite ignores the clause; its
+/// database write lock already serializes writes.
 pub(crate) fn owned_portfolio(
     owner: UserId,
     portfolio_id: Uuid,
@@ -27,7 +33,9 @@ pub(crate) fn owned_portfolio(
         .and_where(Column::Id.eq(portfolio_id))
         .and_where(Column::OwnerUserId.eq(owner.as_uuid()));
     if active_only {
-        select.and_where(Column::Status.eq(PortfolioStatus::Active.as_str()));
+        select
+            .and_where(Column::Status.eq(PortfolioStatus::Active.as_str()))
+            .lock_shared();
     }
     select
 }
@@ -138,8 +146,9 @@ pub async fn transition(
 
 /// Touches an owned portfolio as the first write of a transaction. Returns
 /// rows changed (0 when not owned). On SQLite the write takes the database
-/// write lock, so concurrent cash-account writes wait until the transaction
-/// ends. PostgreSQL support must add row locking to the guarded writes.
+/// write lock; on PostgreSQL it locks the portfolio row, which conflicts with
+/// the `FOR SHARE` of the cash-account guards. Either way, concurrent
+/// cash-account writes wait until the transaction ends.
 pub async fn lock_owned(
     db: &impl ConnectionTrait,
     owner: UserId,

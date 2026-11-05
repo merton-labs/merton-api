@@ -426,7 +426,7 @@ async fn delete_removes_unused_instrument_and_refuses_when_in_use() {
     let db = app.db();
     let backend = db.get_database_backend();
     for sql in [
-        "CREATE TABLE price_probe (instrument_id BLOB NOT NULL \
+        "CREATE TABLE price_probe (instrument_id uuid NOT NULL \
          REFERENCES instruments(id) ON DELETE RESTRICT)",
         "INSERT INTO price_probe (instrument_id) SELECT id FROM instruments",
     ] {

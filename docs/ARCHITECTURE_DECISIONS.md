@@ -278,8 +278,8 @@ Every decision uses the same fields:
 - **Decision:** Changing `DATABASE_URL` is not a SQLite→PostgreSQL migration.
   A real migration needs schema conversion, data transfer, financial
   reconciliation and verification.
-- **Consequences:** Only the `sqlx-sqlite` driver feature is compiled in
-  today.
+- **Consequences:** PostgreSQL support was added under ADR-DB-10; moving
+  an existing SQLite database is still a separate task.
 
 ### ADR-DB-07 — Classifying SQLite `ON DELETE RESTRICT` refusals
 - **Status:** Accepted · **Source:** Implementation (P2A) · **Phases:** P2A onward
@@ -291,7 +291,9 @@ Every decision uses the same fields:
 - **Consequences:**
   - Any code that maps foreign-key failures to an API error must use this
     helper.
-  - It is the one place to adapt when PostgreSQL support is added.
+  - PostgreSQL reports `ON DELETE RESTRICT` as `restrict_violation`
+    (23001), which SeaORM does not classify either; the helper matches it
+    too (ADR-DB-10).
 
 ### ADR-DB-09 — Read-then-write transactions start with a write
 - **Status:** Accepted · **Source:** Implementation (P2B) · **Phases:** P2B onward
@@ -309,8 +311,31 @@ Every decision uses the same fields:
 - **Consequences:**
   - Ledger transactions (P3 onward) must follow this rule.
   - Read-only transactions, such as list plus count, are unaffected.
-  - PostgreSQL support must add row locks (`FOR UPDATE`/`FOR SHARE`) to
-    the guarded writes as well; see ADR-PORT-04.
+  - On PostgreSQL the guarded write locks the row instead, and guards on
+    other tables add `FOR SHARE` (ADR-DB-10, ADR-PORT-04).
+
+### ADR-DB-10 — PostgreSQL support
+- **Status:** Accepted · **Source:** Owner (2026-11-03: support PostgreSQL, for Neon), Implementation (details) · **Phases:** post-MVP
+- **Decision:** The same build runs on SQLite or PostgreSQL, chosen by
+  the `DATABASE_URL` scheme. Migrations are unchanged and create the same
+  schema on both.
+- **Implementation:**
+  - Drivers: `sqlx-sqlite` and `sqlx-postgres`, with rustls for TLS
+    (`runtime-tokio-rustls`), so hosted URLs with `sslmode=require` work.
+  - Writes: the guarded first write (`lock_owned`, `lock_active`) locks the
+    portfolio row. Guards that only read the portfolio for a write (the
+    cash-account `INSERT … SELECT`, rename and delete) add `FOR SHARE`,
+    which SQLite ignores. Ledger writes are therefore serialized per
+    portfolio, as on SQLite.
+  - Reads: `database::begin_read` starts read-only transactions with
+    `REPEATABLE READ` on PostgreSQL, so every statement sees one snapshot,
+    as SQLite does.
+  - Errors: `is_foreign_key_violation` also matches 23001 (ADR-DB-07).
+  - Tests: `TEST_DATABASE_URL` runs the whole suite on PostgreSQL, one
+    database per test. Catalog checks in the tests have a PostgreSQL form.
+- **Not done:** copying an existing SQLite database to PostgreSQL with a
+  financial reconciliation (ADR-DB-06). A new PostgreSQL deployment starts
+  empty.
 
 ### ADR-DB-08 — `CHECK` constraints for enumerated columns
 - **Status:** Accepted · **Source:** Implementation (P2A) · **Phases:** P2A onward
@@ -668,9 +693,10 @@ Every decision uses the same fields:
 - **Concurrency:** the transaction starts with a guarded write
   (`lock_owned`, ADR-DB-09). A concurrent cash-account create therefore
   waits, then finds the portfolio gone and returns `404`.
-  - On PostgreSQL (not supported yet) this is not enough. There, the
-    guarded `INSERT … SELECT` must lock the portfolio row (`FOR SHARE`), and
-    the delete must take `FOR UPDATE`.
+  - On PostgreSQL the guarded write locks the portfolio row, and the
+    cash-account guards read it `FOR SHARE`, which waits for that lock
+    (ADR-DB-10). `tests/cash_accounts.rs` races the two; without
+    `FOR SHARE` the delete fails with `409` in some rounds.
 - **New tables:** a phase that adds a table referencing portfolios must
   extend `portfolios::service::delete` explicitly.
 

@@ -17,8 +17,8 @@ dotenvy = "0.15.7"
 getrandom = "0.4.3"
 hmac = "0.13.0"
 rust_decimal = { version = "1.43.0", default-features = false, features = ["std"] }
-sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio", "sqlx-sqlite", "with-time", "with-uuid"] }
-sea-orm-migration = { version = "2.0.4", default-features = false, features = ["runtime-tokio", "sqlx-sqlite", "with-time", "with-uuid"] }
+sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite", "with-time", "with-uuid"] }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite", "with-time", "with-uuid"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.1"
 thiserror = "2.0.21"

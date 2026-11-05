@@ -397,7 +397,7 @@ async fn account_with_movements_cannot_be_deleted() {
     let account = app.new_account(&alice, &portfolio, "Used", "THB").await;
     sql(
         &app,
-        "CREATE TABLE movement_probe (cash_account_id BLOB NOT NULL \
+        "CREATE TABLE movement_probe (cash_account_id uuid NOT NULL \
          REFERENCES cash_accounts(id) ON DELETE RESTRICT)",
     )
     .await;
@@ -445,7 +445,7 @@ async fn portfolio_with_account_history_is_kept_intact() {
     let unused = app.new_account(&alice, &portfolio, "Unused", "THB").await;
     sql(
         &app,
-        "CREATE TABLE movement_probe (cash_account_id BLOB NOT NULL \
+        "CREATE TABLE movement_probe (cash_account_id uuid NOT NULL \
          REFERENCES cash_accounts(id) ON DELETE RESTRICT)",
     )
     .await;
@@ -468,6 +468,40 @@ async fn portfolio_with_account_history_is_kept_intact() {
             StatusCode::OK
         );
     }
+}
+
+/// ADR-PORT-04: an account created while its portfolio is being deleted
+/// either lands first and is deleted with it, or waits and finds the
+/// portfolio gone. On PostgreSQL this depends on the `FOR SHARE` guard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn account_creation_racing_portfolio_delete_is_serialized() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+
+    for round in 0..20 {
+        let portfolio = app.new_portfolio(&alice, "Contended").await;
+        let (deleted, created) = tokio::join!(
+            app.delete_portfolio(&alice, &portfolio),
+            app.create_account(
+                &alice,
+                &portfolio,
+                json!({ "name": "Cash", "currency": "THB" })
+            ),
+        );
+        assert_eq!(
+            deleted.status,
+            StatusCode::NO_CONTENT,
+            "round {round}: {}",
+            deleted.body
+        );
+        assert!(
+            matches!(created.status, StatusCode::CREATED | StatusCode::NOT_FOUND),
+            "round {round}: {} {}",
+            created.status,
+            created.body
+        );
+    }
+    assert_eq!(stored_accounts(&app).await, 0);
 }
 
 #[tokio::test]
@@ -530,7 +564,7 @@ async fn other_users_cannot_probe_archived_or_used_accounts() {
     let idle = app.new_account(&alice, &portfolio, "Idle", "THB").await;
     sql(
         &app,
-        "CREATE TABLE movement_probe (cash_account_id BLOB NOT NULL \
+        "CREATE TABLE movement_probe (cash_account_id uuid NOT NULL \
          REFERENCES cash_accounts(id) ON DELETE RESTRICT)",
     )
     .await;

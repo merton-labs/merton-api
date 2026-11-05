@@ -11,7 +11,7 @@ use merton_api::app::AppState;
 use merton_api::config::{DatabaseConfig, SecurityConfig};
 use merton_api::infrastructure::database;
 use merton_api::infrastructure::migrations::Migrator;
-use sea_orm::{DatabaseConnection, DbErr};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr};
 use sea_orm_migration::MigratorTrait;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -20,19 +20,48 @@ pub const ORIGIN: &str = "http://localhost:8080";
 pub const SESSION_COOKIE: &str = "__Host-merton_session";
 pub const PASSWORD: &str = "correct horse battery staple";
 
-/// Connects to a fresh in-memory SQLite database with migrations applied.
+/// Connects to a fresh database with migrations applied.
 ///
-/// A single connection is used because each SQLite in-memory connection is
-/// its own database, which also keeps every test isolated.
+/// By default this is in-memory SQLite with a single connection, because
+/// each SQLite in-memory connection is its own database, which also keeps
+/// every test isolated. With `TEST_DATABASE_URL` set to a PostgreSQL server
+/// (for example `postgres://localhost/postgres`), each test creates its own
+/// `merton_test_*` database there instead.
 pub async fn test_db() -> Result<DatabaseConnection, DbErr> {
+    let (url, max_connections) = match std::env::var("TEST_DATABASE_URL") {
+        Ok(server) => (fresh_postgres_database(&server).await?, 5),
+        Err(_) => ("sqlite::memory:".to_owned(), 1),
+    };
     let config = DatabaseConfig {
-        url: "sqlite::memory:".to_owned(),
-        max_connections: 1,
+        url,
+        max_connections,
         busy_timeout: Duration::from_secs(1),
     };
     let db = database::connect(&config).await?;
     Migrator::up(&db, None).await?;
     Ok(db)
+}
+
+/// Creates an empty database on the server and returns its URL.
+async fn fresh_postgres_database(server: &str) -> Result<String, DbErr> {
+    let name = format!("merton_test_{}", uuid::Uuid::now_v7().simple());
+    let admin = sea_orm::Database::connect(server).await?;
+    admin
+        .execute_unprepared(&format!("CREATE DATABASE \"{name}\""))
+        .await?;
+    admin.close().await?;
+    let (base, query) = server.split_once('?').unwrap_or((server, ""));
+    let (prefix, _) = base.rsplit_once('/').expect("database URL has a path");
+    Ok(if query.is_empty() {
+        format!("{prefix}/{name}")
+    } else {
+        format!("{prefix}/{name}?{query}")
+    })
+}
+
+/// Whether the test database is PostgreSQL rather than SQLite.
+pub fn is_postgres(db: &DatabaseConnection) -> bool {
+    db.get_database_backend() == sea_orm::DbBackend::Postgres
 }
 
 pub fn security_config() -> SecurityConfig {

@@ -19,6 +19,12 @@ change between minor versions.
   their percentages in the quote currency, as in Snowball's Holdings table
   (ADR-RET-01).
 
+- PostgreSQL support: set `DATABASE_URL` to a `postgres://` URL (TLS
+  included, for hosted services such as Neon). Ledger writes lock the
+  portfolio row and reads use one snapshot, so behaviour matches SQLite.
+  Existing SQLite data is not migrated (ADR-DB-10). Tests run on
+  PostgreSQL with `TEST_DATABASE_URL`.
+
 ### Changed
 
 - Everything outside the MVP, including CSV import and export (P6), is now
