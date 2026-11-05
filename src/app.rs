@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use sea_orm::{DatabaseConnection, DbErr};
 use sea_orm_migration::MigratorTrait;
-use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tokio::time::MissedTickBehavior;
 
@@ -131,7 +130,7 @@ async fn purge_sessions_periodically(db: DatabaseConnection) {
     ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         ticks.tick().await;
-        match auth::service::purge_ended_sessions(&db, OffsetDateTime::now_utc()).await {
+        match auth::service::purge_ended_sessions(&db, database::now()).await {
             Ok(0) => {}
             Ok(deleted) => tracing::info!(deleted, "purged ended sessions"),
             Err(err) => tracing::warn!(error = %err, "failed to purge ended sessions"),

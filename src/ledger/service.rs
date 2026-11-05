@@ -24,7 +24,7 @@ use super::transaction::{
 };
 use crate::auth::{FieldError, UserId};
 use crate::cash_accounts::repository as cash_accounts;
-use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
+use crate::infrastructure::database::{self, begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::{cash_movement, position_movement, transaction};
 use crate::instruments::repository as instruments;
 use crate::pagination::{Page, Paged};
@@ -87,7 +87,7 @@ pub async fn create(
     raw: &RawTransaction<'_>,
 ) -> Result<LedgerEntry, LedgerError> {
     let valid = validate(kind, raw).map_err(LedgerError::Validation)?;
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     let model = to_model(Uuid::now_v7(), portfolio_id, &valid, now, now);
 
     write(db, owner, portfolio_id, |txn| async move {
@@ -126,7 +126,7 @@ pub async fn replace(
             portfolio_id,
             &valid,
             existing.created_at,
-            OffsetDateTime::now_utc(),
+            database::now(),
         );
         repository::delete_movements(&txn, id).await?;
         repository::replace(&txn, model.clone()).await?;
@@ -218,8 +218,7 @@ where
     Fut: Future<Output = Result<(DatabaseTransaction, transaction::Model), LedgerError>>,
 {
     let txn = db.begin().await?;
-    let locked =
-        portfolios::lock_active(&txn, owner, portfolio_id, OffsetDateTime::now_utc()).await?;
+    let locked = portfolios::lock_active(&txn, owner, portfolio_id, database::now()).await?;
     if locked == 0 {
         // Release the connection before asking why (the pool may hold one).
         txn.rollback().await?;

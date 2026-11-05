@@ -5,13 +5,13 @@
 //! concurrent insert of the same date cannot slip through.
 
 use sea_orm::{DatabaseConnection, DbErr, SqlErr};
-use time::{Date, OffsetDateTime};
+use time::Date;
 use uuid::Uuid;
 
 use super::repository::{self, DateRange, FxRateFilter, FxRateValues, PriceValues};
 use super::{FxRate, FxRateList, InstrumentPrice, MarketDataError, PriceList, Source};
 use crate::auth::{FieldError, UserId};
-use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
+use crate::infrastructure::database::{self, begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::{fx_rate, instrument_price};
 use crate::instruments::repository as instruments;
 use crate::ledger::decimal::{Price, Rate};
@@ -54,7 +54,7 @@ pub async fn create_price(
     input: PriceInput<'_>,
 ) -> Result<InstrumentPrice, MarketDataError> {
     let (price_date, price) = validate_price(&input)?;
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     let model = instrument_price::Model {
         id: Uuid::now_v7(),
         instrument_id,
@@ -122,7 +122,7 @@ pub async fn replace_price(
         price_date,
         price: &price.to_string(),
     };
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     match repository::update_price(db, owner, instrument_id, id, values, now).await {
         Ok(0) => Err(MarketDataError::NotFound),
         Ok(_) => get_price(db, owner, instrument_id, id).await,
@@ -185,7 +185,7 @@ pub async fn create_fx_rate(
     input: FxRateInput<'_>,
 ) -> Result<FxRate, MarketDataError> {
     let valid = validate_fx_rate(&input)?;
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     let model = fx_rate::Model {
         id: Uuid::now_v7(),
         owner_user_id: owner.as_uuid(),
@@ -268,7 +268,7 @@ pub async fn replace_fx_rate(
         rate_date: valid.date,
         rate: &valid.rate.to_string(),
     };
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     match repository::update_fx_rate(db, owner, id, values, now).await {
         Ok(0) => Err(MarketDataError::NotFound),
         Ok(_) => get_fx_rate(db, owner, id).await,

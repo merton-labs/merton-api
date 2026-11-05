@@ -24,12 +24,12 @@ WORKDIR /app
 COPY --from=builder /usr/local/bin/merton-api /usr/local/bin/merton-api
 
 ENV APP_HOST=0.0.0.0 \
-    APP_PORT=8080 \
+    APP_PORT=18080 \
     DATABASE_URL=sqlite:///app/data/merton.db \
     RUST_LOG=merton_api=info,tower_http=info,sqlx=warn
 
 USER merton
-EXPOSE 8080
+EXPOSE 18080
 VOLUME ["/app/data"]
 
 ENTRYPOINT ["/usr/local/bin/merton-api"]

@@ -1051,7 +1051,7 @@ tests, and `unsafe_code` is forbidden.
   listen. Invalid configuration exits non-zero.
 - **Docker:** a multi-stage image running as non-root uid 10001. The
   `merton-data` volume is mounted at `/app/data`. The port is published on
-  `127.0.0.1:8080`, and graceful SIGTERM shutdown is verified.
+  `127.0.0.1:18080`, and graceful SIGTERM shutdown is verified.
 - **Topology:** same-origin reverse proxy (`/` → SvelteKit, `/api/*` →
   Axum), single instance (rate limits are process-local).
 - **Backups:** copy the SQLite database from the volume. Because WAL mode
@@ -1182,7 +1182,7 @@ every screen (merton-web PR #5).
 | Rate limiting (atomic) | ✅ Done | `src/auth/rate_limit.rs` |
 | Bounded Argon2 | ✅ Done | `src/auth/password.rs` (`HashLimiter`, `HashPermit`), `AUTH_MAX_CONCURRENT_HASHES` |
 | Problem Details | ✅ Done | `src/http/error.rs` |
-| Tests | ✅ 319 passing on SQLite and on PostgreSQL 18 | `cargo test --locked`, and with `TEST_DATABASE_URL` (local) |
+| Tests | ✅ 320 passing on SQLite and on PostgreSQL 18 | `cargo test --locked`, and with `TEST_DATABASE_URL` (local) |
 | Portfolios (P2A) | ✅ Done | migration `m20261024_000003`; `src/portfolios/`; `src/http/portfolios.rs`; `tests/portfolios.rs` |
 | FK backstop for deletes | ✅ Done | `infrastructure::database::is_foreign_key_violation` (ADR-DB-07) |
 | Instruments, cash accounts (P2B) | ✅ Done | migrations `m20261024_000004/5`; `src/{instruments,cash_accounts}/`; `src/http/{instruments,cash_accounts}.rs`; `tests/{instruments,cash_accounts}.rs` |
@@ -1193,7 +1193,7 @@ every screen (merton-web PR #5).
 | CSV (P6) | ➖ Backlog | ADR-SCOPE-10 (owner, 2026-11-03) |
 | Dividends received (after the MVP) | ✅ Done | ADR-DIV-01; `src/dividends/`; `src/http/dividends.rs`; `tests/dividends.rs` |
 | Returns per holding (after the MVP) | ✅ Done | ADR-RET-01; `src/returns/`; `src/http/returns.rs`; `tests/returns.rs` |
-| PostgreSQL support (after the MVP) | 🟡 Branch `feat/postgres` | ADR-DB-10; `src/infrastructure/database.rs`; `tests/common/mod.rs`; SQLite→PostgreSQL data transfer not built yet |
+| PostgreSQL support (after the MVP) | ✅ Done (PR #16; timestamp precision fix on branch `fix/postgres-timestamp-precision`) | ADR-DB-10; `src/infrastructure/database.rs`; `tests/common/mod.rs`; SQLite→PostgreSQL data transfer not built yet |
 | `rust_decimal` | ✅ Added (P3) | `rust_decimal = 1.43`, `default-features = false`, `std` |
 | Session purge | ✅ Done (PR #3, merge `a2bcbb9`, run 41106885927) | `auth::service::purge_ended_sessions`; task in `src/app.rs`; `tests/auth.rs` |
 | Account recovery | ➖ Backlog | ADR-AUTH-10 (owner, 2026-10-31) |
@@ -1209,7 +1209,10 @@ every screen (merton-web PR #5).
    and the full-stack Docker Compose stack in `merton-web`). Done on
    2026-11-01: the remaining confirmations (ADR-INST-02, NUM-04, NUM-05,
    TXN-07 rules 5–6), checked against the live Snowball Analytics app.
-2. **Backlog** (§4): nothing is scheduled. When the owner schedules an
+2. **PostgreSQL (ADR-DB-10):** supported. Next: copy an existing SQLite
+   database to PostgreSQL with an exact financial reconciliation
+   (ADR-DB-06), then move the owner's deployment to Neon.
+3. **Backlog** (§4): nothing is scheduled. When the owner schedules an
    item, give it a phase or ADR first. For P6, reuse the ledger write path
    (ADR-CSV-04, ADR-DB-09) and store imported prices and rates with
    `source = IMPORT` (ADR-VAL-06).
