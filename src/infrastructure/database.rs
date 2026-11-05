@@ -11,6 +11,8 @@ use sea_orm::{
     DbErr, IsolationLevel, RuntimeErr, SqlErr, TransactionTrait,
 };
 
+use time::OffsetDateTime;
+
 use crate::config::DatabaseConfig;
 
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -40,6 +42,17 @@ pub async fn connect(config: &DatabaseConfig) -> Result<DatabaseConnection, DbEr
         });
 
     Database::connect(options).await
+}
+
+/// The current UTC time, truncated to whole microseconds.
+///
+/// PostgreSQL's `timestamptz` keeps microseconds, while the clock and SQLite's
+/// text timestamps keep more. Every stored timestamp is taken from here, so a
+/// value returned in a response is the value a later read returns, on both
+/// backends.
+pub fn now() -> OffsetDateTime {
+    let now = OffsetDateTime::now_utc();
+    now - time::Duration::nanoseconds(i64::from(now.nanosecond() % 1_000))
 }
 
 /// Begins a read-only transaction whose statements all see one snapshot.
@@ -83,4 +96,18 @@ pub fn is_foreign_key_violation(err: &DbErr) -> bool {
             Some(POSTGRES_RESTRICT_VIOLATION) => true,
             _ => false,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn now_has_no_sub_microsecond_part() {
+        let before = OffsetDateTime::now_utc();
+        let now = now();
+        assert_eq!(now.nanosecond() % 1_000, 0);
+        assert!(before - now < time::Duration::microseconds(1));
+        assert!(now <= OffsetDateTime::now_utc());
+    }
 }

@@ -5,14 +5,13 @@
 //! updated.
 
 use sea_orm::{DatabaseConnection, TransactionTrait};
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::repository;
 use super::{MAX_NAME_CHARS, Portfolio, PortfolioError, PortfolioList, PortfolioStatus};
 use crate::auth::{FieldError, UserId};
 use crate::cash_accounts::repository as cash_accounts;
-use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
+use crate::infrastructure::database::{self, begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::portfolio;
 use crate::ledger::repository as ledger;
 use crate::pagination::Page;
@@ -44,7 +43,7 @@ pub async fn create(
         return Err(PortfolioError::Validation(errors));
     };
 
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     let model = portfolio::Model {
         id: Uuid::now_v7(),
         owner_user_id: owner.as_uuid(),
@@ -120,7 +119,7 @@ pub async fn update(
         id,
         name.as_ref().map(DisplayName::as_str),
         currency.as_ref().map(CurrencyCode::as_str),
-        OffsetDateTime::now_utc(),
+        database::now(),
     )
     .await?;
     if changed == 0 {
@@ -182,7 +181,7 @@ pub async fn delete(
 ) -> Result<(), PortfolioError> {
     let result = async {
         let txn = db.begin().await?;
-        if repository::lock_owned(&txn, owner, id, OffsetDateTime::now_utc()).await? == 0 {
+        if repository::lock_owned(&txn, owner, id, database::now()).await? == 0 {
             return Ok(Err(PortfolioError::NotFound));
         }
         // Explicit check; the RESTRICT foreign keys below are the backstop.
@@ -210,8 +209,7 @@ async fn transition(
     to: PortfolioStatus,
     wrong_state: PortfolioError,
 ) -> Result<Portfolio, PortfolioError> {
-    let changed =
-        repository::transition(db, owner, id, from, to, OffsetDateTime::now_utc()).await?;
+    let changed = repository::transition(db, owner, id, from, to, database::now()).await?;
     if changed == 0 {
         return Err(missing_or(db, owner, id, wrong_state).await);
     }

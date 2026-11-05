@@ -1,13 +1,12 @@
 //! Cash account use cases.
 
 use sea_orm::DatabaseConnection;
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::repository;
 use super::{CashAccount, CashAccountError, CashAccountList, MAX_NAME_CHARS};
 use crate::auth::UserId;
-use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
+use crate::infrastructure::database::{self, begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::cash_account;
 use crate::pagination::Page;
 use crate::portfolios::PortfolioStatus;
@@ -32,7 +31,7 @@ pub async fn create(
         return Err(CashAccountError::Validation(errors));
     };
 
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     let model = cash_account::Model {
         id: Uuid::now_v7(),
         portfolio_id,
@@ -97,15 +96,9 @@ pub async fn rename(
             message,
         }])
     })?;
-    let changed = repository::rename_if_active(
-        db,
-        owner,
-        portfolio_id,
-        id,
-        name.as_str(),
-        OffsetDateTime::now_utc(),
-    )
-    .await?;
+    let changed =
+        repository::rename_if_active(db, owner, portfolio_id, id, name.as_str(), database::now())
+            .await?;
     if changed == 0 {
         return Err(explain_no_change(db, owner, portfolio_id).await?);
     }

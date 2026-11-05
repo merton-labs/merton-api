@@ -6,11 +6,11 @@ use std::str::FromStr;
 use std::time::Duration;
 
 const DEFAULT_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
-const DEFAULT_PORT: u16 = 8080;
+const DEFAULT_PORT: u16 = 18080;
 const DEFAULT_DATABASE_URL: &str = "sqlite://data/merton.db";
 const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 5;
 const DEFAULT_DATABASE_BUSY_TIMEOUT_MS: u64 = 5_000;
-const DEFAULT_TRUSTED_ORIGINS: &str = "http://localhost:8080,http://127.0.0.1:8080";
+const DEFAULT_TRUSTED_ORIGINS: &str = "http://localhost:18080,http://127.0.0.1:18080";
 const MIN_SECRET_KEY_BYTES: usize = 32;
 const DEFAULT_MAX_CONCURRENT_HASHES: usize = 4;
 /// Each Argon2 operation holds ~19 MiB, so 64 caps hashing memory at ~1.2 GiB.
@@ -282,14 +282,14 @@ mod tests {
 
         assert_eq!(
             config.server.socket_addr(),
-            "127.0.0.1:8080".parse().unwrap()
+            "127.0.0.1:18080".parse().unwrap()
         );
         assert_eq!(config.database.url, DEFAULT_DATABASE_URL);
         assert_eq!(config.database.max_connections, 5);
         assert_eq!(config.database.busy_timeout, Duration::from_secs(5));
         assert_eq!(
             config.security.trusted_origins,
-            ["http://localhost:8080", "http://127.0.0.1:8080"]
+            ["http://localhost:18080", "http://127.0.0.1:18080"]
         );
         assert!(config.security.trusted_proxies.is_empty());
         assert!(config.security.cookie_secure);
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn rejects_invalid_origins() {
         for origin in [
-            "localhost:8080",
+            "localhost:18080",
             "ftp://example.com",
             "https://example.com/app",
             "*",
@@ -417,12 +417,12 @@ mod tests {
             ("SESSION_COOKIE_SECURE", "false"),
             (
                 "APP_TRUSTED_ORIGINS",
-                "http://localhost:3000,http://[::1]:8080",
+                "http://localhost:3000,http://[::1]:18080",
             ),
         ]);
         assert!(local.is_ok_and(|c| !c.security.cookie_secure));
 
-        for origins in ["https://merton.example.com", "http://192.168.1.10:8080"] {
+        for origins in ["https://merton.example.com", "http://192.168.1.10:18080"] {
             let err = config_from(&[
                 ("SESSION_COOKIE_SECURE", "false"),
                 ("APP_TRUSTED_ORIGINS", origins),

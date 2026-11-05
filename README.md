@@ -43,7 +43,7 @@ cargo run
 Then open the API:
 
 ```bash
-curl http://127.0.0.1:8080/api/v1/health
+curl http://127.0.0.1:18080/api/v1/health
 # {"status":"ok"}
 ```
 
@@ -240,12 +240,12 @@ working directory is loaded if present.
 | Variable                   | Default                                       | Description                              |
 | -------------------------- | --------------------------------------------- | ---------------------------------------- |
 | `APP_HOST`                 | `127.0.0.1`                                   | IP address to bind                       |
-| `APP_PORT`                 | `8080`                                        | Port to bind                             |
+| `APP_PORT`                 | `18080`                                       | Port to bind                             |
 | `DATABASE_URL`             | `sqlite://data/merton.db`                     | Database URL: `sqlite://…` or `postgres://…` |
 | `DATABASE_MAX_CONNECTIONS` | `5`                                           | Maximum pool size (must be > 0)          |
 | `DATABASE_BUSY_TIMEOUT_MS` | `5000`                                        | SQLite busy timeout in milliseconds      |
 | `APP_SECRET_KEY`           | **required**                                  | Server secret, ≥ 32 bytes; keep it stable across restarts |
-| `APP_TRUSTED_ORIGINS`      | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated origins allowed to send mutating browser requests |
+| `APP_TRUSTED_ORIGINS`      | `http://localhost:18080,http://127.0.0.1:18080` | Comma-separated origins allowed to send mutating browser requests |
 | `SESSION_COOKIE_SECURE`    | `true`                                        | `false` only allowed when every trusted origin is loopback HTTP |
 | `TRUSTED_PROXIES`          | empty                                         | Comma-separated proxy IPs whose `X-Forwarded-For` is trusted |
 | `AUTH_MAX_CONCURRENT_HASHES` | `4`                                         | Concurrent Argon2 operations (1–64, ~19 MiB each) |
@@ -339,15 +339,22 @@ docker compose down           # stop (data is kept)
 docker compose down -v        # stop and delete the data volume
 ```
 
-The API is published on `http://127.0.0.1:8080`. SQLite data is stored in the
+The API is published on `http://127.0.0.1:18080`. SQLite data is stored in the
 `merton-data` named volume, mounted at `/app/data`. The container runs as a
 non-root user. Compose refuses to start without `APP_SECRET_KEY`.
+
+To use PostgreSQL (for example Neon), set `DATABASE_URL` to a `postgres://…`
+URL in `.env` or the shell; without it, Compose uses
+`sqlite:///app/data/merton.db`. The `.env.example` value
+`sqlite://data/merton.db` resolves to the same file, because the container's
+working directory is `/app`. Data already in SQLite is not copied over
+(ADR-DB-10).
 
 ### Full stack (with `merton-web`)
 
 `merton-web/compose.yaml` runs `merton-api`, `merton-web`, and a Caddy reverse
-proxy on the same origin (`http://localhost:8080`), routing `/api/*` to
-`api:8080` and everything else to `web:3000`:
+proxy on the same origin (`http://localhost:18080`), routing `/api/*` to
+`api:18080` and everything else to `web:3000`:
 
 ```bash
 cd ../merton-web
@@ -358,7 +365,7 @@ docker compose up --build -d
 
 In `merton-web/compose.yaml`, the proxy has a static IP (`172.28.0.10`) on the
 compose network matching `TRUSTED_PROXIES`, `APP_TRUSTED_ORIGINS` is set to
-`http://localhost:8080`, and `SESSION_COOKIE_SECURE` remains at its default
+`http://localhost:18080`, and `SESSION_COOKIE_SECURE` remains at its default
 (`true`). Production deployments behind HTTPS must set `APP_TRUSTED_ORIGINS` to
 the public `https://` origin and keep `SESSION_COOKIE_SECURE=true`.
 

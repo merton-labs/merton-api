@@ -331,8 +331,16 @@ Every decision uses the same fields:
     `REPEATABLE READ` on PostgreSQL, so every statement sees one snapshot,
     as SQLite does.
   - Errors: `is_foreign_key_violation` also matches 23001 (ADR-DB-07).
+  - Timestamps: PostgreSQL's `timestamptz` keeps microseconds; the clock
+    and SQLite's text keep more. Every stored timestamp comes from
+    `database::now()`, which truncates to microseconds, so a response and
+    a later read return the same value on both backends. Before this, a
+    `created_at` in a create response could differ from the same row read
+    back on PostgreSQL.
   - Tests: `TEST_DATABASE_URL` runs the whole suite on PostgreSQL, one
     database per test. Catalog checks in the tests have a PostgreSQL form.
+    CI runs that job with `--no-fail-fast`, so a failing test file does not
+    hide the others.
 - **Not done:** copying an existing SQLite database to PostgreSQL with a
   financial reconciliation (ADR-DB-06). A new PostgreSQL deployment starts
   empty.

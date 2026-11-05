@@ -413,7 +413,10 @@ async fn sliding_expiry_never_exceeds_absolute_expiry() {
 
     assert_eq!(app.me(&token).await.status, StatusCode::OK);
 
-    assert_eq!(session_row(&app, &token).await.idle_expires_at, absolute);
+    // Compared with the stored value: PostgreSQL keeps microseconds only.
+    let row = session_row(&app, &token).await;
+    assert_close(row.absolute_expires_at, absolute);
+    assert_eq!(row.idle_expires_at, row.absolute_expires_at);
 }
 
 #[tokio::test]
@@ -565,7 +568,7 @@ async fn mutations_from_untrusted_origins_are_rejected() {
         )
         .await;
     assert_eq!(cli.status, StatusCode::OK);
-    assert_eq!(ORIGIN, "http://localhost:8080");
+    assert_eq!(ORIGIN, "http://localhost:18080");
 }
 
 #[tokio::test]

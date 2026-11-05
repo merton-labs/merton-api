@@ -25,11 +25,31 @@ change between minor versions.
   Existing SQLite data is not migrated (ADR-DB-10). Tests run on
   PostgreSQL with `TEST_DATABASE_URL`.
 
+### Fixed
+
+- PostgreSQL: timestamps in create and update responses (`created_at`,
+  `updated_at`) now equal the stored values. They were returned with
+  sub-microsecond digits that PostgreSQL does not keep, so reading the same
+  row back gave a different value. All stored timestamps are now whole
+  microseconds on both backends (ADR-DB-10).
+
 ### Changed
 
+- The default port is now 18080 instead of 8080: `APP_PORT`, the default
+  `APP_TRUSTED_ORIGINS`, the Docker image and Compose. On Windows, Hyper-V
+  and WSL often reserve 8080. Set `APP_PORT` and `APP_TRUSTED_ORIGINS` to
+  keep the old port.
+- Docker Compose: `DATABASE_URL` can be set in `.env` or the shell, for
+  example to a PostgreSQL (Neon) URL; it still defaults to SQLite on the
+  `merton-data` volume. It was fixed to SQLite before.
 - Everything outside the MVP, including CSV import and export (P6), is now
   a backlog item the owner can schedule, instead of an exclusion
   (ADR-SCOPE-10, `docs/PROJECT_PLAN.md` §4). Docs only.
+
+### Removed
+
+- `package.json`, `package-lock.json` and `neon.ts`, left over from the Neon
+  CLI setup. Nothing used them; the API reaches Neon through `DATABASE_URL`.
 
 ## [0.1.0] - 2026-11-01
 

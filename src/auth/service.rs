@@ -13,6 +13,7 @@ use super::rate_limit::LoginRateLimiter;
 use super::repository::{self, NewSession, NewUser};
 use super::session::{self, Lifetime, SessionToken};
 use super::{AuthError, AuthenticatedSession, CurrentUser, FieldError, InternalError, UserId};
+use crate::infrastructure::database;
 use crate::infrastructure::entities::user_session;
 
 pub struct LoginOutcome {
@@ -46,7 +47,7 @@ pub async fn register(
         email: email.display(),
         normalized_email: email.normalized(),
         password_hash: &password_hash,
-        now: OffsetDateTime::now_utc(),
+        now: database::now(),
     };
     match repository::insert_user(db, new_user).await {
         Ok(()) => Ok(CurrentUser {
@@ -151,7 +152,7 @@ pub async fn login(
     }
 
     let token = SessionToken::generate().map_err(InternalError::from)?;
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     let lifetime = Lifetime::starting_at(now);
 
     let txn = db.begin().await?;
@@ -197,7 +198,7 @@ pub async fn authenticate(
         .await?
         .ok_or(AuthError::Unauthenticated)?;
 
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     let lifetime = Lifetime {
         idle_expires_at: session.idle_expires_at,
         absolute_expires_at: session.absolute_expires_at,
@@ -228,13 +229,7 @@ pub async fn authenticate(
 }
 
 pub async fn logout(db: &DatabaseConnection, session_id: Uuid) -> Result<(), AuthError> {
-    repository::revoke_session(
-        db,
-        user_session::Column::Id,
-        session_id,
-        OffsetDateTime::now_utc(),
-    )
-    .await?;
+    repository::revoke_session(db, user_session::Column::Id, session_id, database::now()).await?;
     Ok(())
 }
 

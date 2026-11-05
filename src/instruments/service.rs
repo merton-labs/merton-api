@@ -1,7 +1,6 @@
 //! Instrument use cases.
 
 use sea_orm::DatabaseConnection;
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::repository::{self, Changes};
@@ -10,7 +9,7 @@ use super::{
     optional_isin,
 };
 use crate::auth::{FieldError, UserId};
-use crate::infrastructure::database::{begin_read, is_foreign_key_violation};
+use crate::infrastructure::database::{self, begin_read, is_foreign_key_violation};
 use crate::infrastructure::entities::instrument;
 use crate::pagination::Page;
 use crate::validation::{CurrencyCode, DisplayName, check};
@@ -58,7 +57,7 @@ pub async fn create(
         return Err(InstrumentError::Validation(errors));
     };
 
-    let now = OffsetDateTime::now_utc();
+    let now = database::now();
     let model = instrument::Model {
         id: Uuid::now_v7(),
         owner_user_id: owner.as_uuid(),
@@ -150,7 +149,7 @@ pub async fn update(
             isin: isin.as_ref().map(Option::as_deref),
             exchange: exchange.as_ref().map(Option::as_deref),
         },
-        OffsetDateTime::now_utc(),
+        database::now(),
     )
     .await?;
     if changed == 0 {
