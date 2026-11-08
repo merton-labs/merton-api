@@ -341,7 +341,9 @@ docker compose down -v        # stop and delete the data volume
 
 The API is published on `http://127.0.0.1:18080`. SQLite data is stored in the
 `merton-data` named volume, mounted at `/app/data`. The container runs as a
-non-root user. Compose refuses to start without `APP_SECRET_KEY`.
+non-root user. Compose refuses to start without `APP_SECRET_KEY`. The image
+declares no `VOLUME` (some hosts, such as Railway, reject it), so with plain
+`docker run` and SQLite, mount a volume at `/app/data` yourself.
 
 To use PostgreSQL (for example Neon), set `DATABASE_URL` to a `postgres://…`
 URL in `.env` or the shell; without it, Compose uses
