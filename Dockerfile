@@ -30,6 +30,7 @@ ENV APP_HOST=0.0.0.0 \
 
 USER merton
 EXPOSE 18080
-VOLUME ["/app/data"]
+# No VOLUME instruction: hosts such as Railway reject it. Mount /app/data
+# yourself for SQLite (Compose uses the merton-data named volume).
 
 ENTRYPOINT ["/usr/local/bin/merton-api"]
