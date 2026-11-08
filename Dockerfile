@@ -8,9 +8,8 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo build --release --locked \
+# No BuildKit cache mounts: Railway rejects them without a Railway-specific id.
+RUN cargo build --release --locked \
     && cp target/release/merton-api /usr/local/bin/merton-api
 
 FROM debian:trixie-slim AS runtime
@@ -30,7 +29,7 @@ ENV APP_HOST=0.0.0.0 \
 
 USER merton
 EXPOSE 18080
-# No VOLUME instruction: hosts such as Railway reject it. Mount /app/data
+# No VOLUME instruction: hosts such as Railway manage volumes. Mount /app/data
 # yourself for SQLite (Compose uses the merton-data named volume).
 
 ENTRYPOINT ["/usr/local/bin/merton-api"]

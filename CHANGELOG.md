@@ -42,10 +42,12 @@ change between minor versions.
 - Docker Compose: `DATABASE_URL` can be set in `.env` or the shell, for
   example to a PostgreSQL (Neon) URL; it still defaults to SQLite on the
   `merton-data` volume. It was fixed to SQLite before.
-- The Docker image no longer declares `VOLUME ["/app/data"]`, which
-  Railway rejects. Compose still mounts the `merton-data` volume there; with
-  plain `docker run` and SQLite, mount a volume at `/app/data` (`-v`) or the
-  data goes with the container.
+- The Docker image no longer declares `VOLUME ["/app/data"]`. Compose still
+  mounts the `merton-data` volume there; with plain `docker run` and SQLite,
+  mount a volume at `/app/data` (`-v`) or the data goes with the container.
+- The Dockerfile no longer uses BuildKit cache mounts, which Railway rejects
+  without a Railway-specific `id`. Local image rebuilds recompile the
+  dependencies.
 - Everything outside the MVP, including CSV import and export (P6), is now
   a backlog item the owner can schedule, instead of an exclusion
   (ADR-SCOPE-10, `docs/PROJECT_PLAN.md` §4). Docs only.
